@@ -1,0 +1,31 @@
+{
+  "action_set": "combat",
+  "aim": {
+    "acceleration": 1.4,
+    "bias_dps": [
+      -7.718549618320611,
+      4.608091603053434,
+      -1.0838167938931302
+    ],
+    "deadzone_dps": 6.0,
+    "enabled": true,
+    "horizontal_axis": "gz",
+    "horizontal_sensitivity": 18.0,
+    "invert_horizontal": true,
+    "invert_vertical": true,
+    "max_pixels_per_second": 25000.0,
+    "mount_learned": true,
+    "neutral_dps": 6.0,
+    "paused": false,
+    "sensitivity": 18.0,
+    "smoothing": 0.9,
+    "vertical_axis": "gx",
+    "vertical_sensitivity": 14.0
+  },
+  "button_input": "space",
+  "game": "minecraft",
+  "gestures": {
+    "swing": "left_click"
+  },
+  "version": 1
+}

@@ -1,0 +1,22 @@
+{
+  "game": "minecraft",
+  "actions": [
+    {"name": "attack", "key": "left_click", "gesture_safe": true, "button_safe": true},
+    {"name": "place", "key": "right_click", "gesture_safe": true, "button_safe": true},
+    {"name": "jump", "key": "space", "gesture_safe": false, "button_safe": true},
+    {"name": "sprint", "key": "left_ctrl", "gesture_safe": true, "button_safe": true},
+    {"name": "sneak", "key": "left_shift", "gesture_safe": false, "button_safe": true},
+    {"name": "inventory", "key": "e", "gesture_safe": false, "button_safe": false},
+    {"name": "drop", "key": "q", "gesture_safe": false, "button_safe": false}
+  ],
+  "action_sets": {
+    "combat": {
+      "gestures": {"swing": "attack"},
+      "buttons": {"btn0": "jump", "btn1": "sprint"}
+    },
+    "build": {
+      "gestures": {"swing": "place"},
+      "buttons": {"btn0": "jump", "btn1": "sneak"}
+    }
+  }
+}

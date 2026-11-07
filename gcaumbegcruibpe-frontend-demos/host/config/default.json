@@ -1,0 +1,12 @@
+{
+  "udp_port": 5005,
+  "stale_timeout_ms": 200,
+  "alignment_window_ms": 40,
+  "sample_rate_hz": 50,
+  "still_gyro_threshold": 0.2,
+  "dtw_window_samples": 50,
+  "match_distance_margin": 1.5,
+  "min_gesture_samples": 8,
+  "max_gesture_samples": 100,
+  "refractory_ms": 400
+}

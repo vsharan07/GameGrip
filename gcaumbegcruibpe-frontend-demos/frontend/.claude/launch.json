@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "gamegrip",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["gamegrip_server.py", "--no-browser"],
+      "port": 8765
+    },
+    {
+      "name": "sports-demo",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8770", "--bind", "127.0.0.1", "--directory", "Demos"],
+      "port": 8770
+    }
+  ]
+}

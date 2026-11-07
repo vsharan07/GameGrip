@@ -1,0 +1,11 @@
+// Copy this file to config.h and fill it in.
+
+#define WIFI_SSID "YOUR_SSID"
+#define WIFI_PASS "YOUR_PASSWORD"
+#define HOST_IP "192.168.x.x"
+#define UDP_PORT 5005
+#define MODULE_ID 0
+// 0 uses the MPU6050 when it answers. 1 always sends fake_imu.
+#define FORCE_FAKE_IMU 0
+// 1 reads the cell on GPIO 34. 0 leaves LOW_BATT clear and prints batt=off.
+#define BATTERY_ENABLED 0

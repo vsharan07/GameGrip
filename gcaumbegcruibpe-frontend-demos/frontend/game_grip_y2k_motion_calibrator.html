@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Grip - Frutiger Metro Motion Calibrator</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- GSAP for Smooth Storyboard Scene Transitions -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <!-- Google Fonts: Bangers (Comic Pop), Bungee (Y2K Metro), Montserrat -->
+    <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Bungee&family=Montserrat:wght@700;900&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        pop: ['Bangers', 'cursive'],
+                        y2k: ['Bungee', 'sans-serif'],
+                        montserrat: ['Montserrat', 'sans-serif'],
+                    },
+                    colors: {
+                        y2kGreen: '#8CE600',
+                        y2kLime: '#B5F500',
+                        y2kDarkGreen: '#3B7A00',
+                        y2kYellow: '#FFEA00',
+                        y2kMagenta: '#FF007F',
+                        y2kCyan: '#00E5FF',
+                        y2kOrange: '#FF6600',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Refined Pop Comic Text Styling */
+        .pop-text-title {
+            font-family: 'Bangers', cursive;
+            letter-spacing: 2px;
+            color: #FFEA00;
+            background: linear-gradient(180deg, #FFF500 0%, #FF6600 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            filter: drop-shadow(3px 3px 0px #000) drop-shadow(-3px -3px 0px #000) drop-shadow(3px -3px 0px #000) drop-shadow(-3px 3px 0px #000) drop-shadow(6px 6px 0px #00E5FF);
+        }
+
+        /* Y2K In-Scene UI Buttons */
+        .y2k-btn {
+            font-family: 'Bungee', sans-serif;
+            background: linear-gradient(180deg, #FFEA00 0%, #FF6600 100%);
+            color: #000;
+            border: 3.5px solid #000;
+            box-shadow: 5px 5px 0px #000;
+            transition: all 0.15s ease-in-out;
+            cursor: pointer;
+        }
+        .y2k-btn:hover {
+            transform: translate(-3px, -3px) scale(1.03);
+            box-shadow: 8px 8px 0px #000;
+            background: linear-gradient(180deg, #B5F500 0%, #00E5FF 100%);
+        }
+        .y2k-btn:active {
+            transform: translate(2px, 2px);
+            box-shadow: 2px 2px 0px #000;
+        }
+
+        .y2k-btn-secondary {
+            font-family: 'Bungee', sans-serif;
+            background: linear-gradient(180deg, #00E5FF 0%, #FF007F 100%);
+            color: #FFF;
+            border: 3.5px solid #000;
+            box-shadow: 5px 5px 0px #000;
+            transition: all 0.15s ease-in-out;
+            cursor: pointer;
+        }
+        .y2k-btn-secondary:hover {
+            transform: translate(-3px, -3px) scale(1.03);
+            box-shadow: 8px 8px 0px #000;
+            background: linear-gradient(180deg, #FFEA00 0%, #B5F500 100%);
+            color: #000;
+        }
+
+        /* Burst Speech Bubble Frame */
+        .comic-burst-bg {
+            clip-path: polygon(
+                50% 0%, 63% 13%, 81% 2%, 84% 20%, 100% 17%, 89% 36%, 100% 52%, 
+                88% 68%, 98% 86%, 79% 80%, 75% 98%, 59% 86%, 47% 100%, 
+                35% 85%, 19% 97%, 18% 78%, 0% 83%, 10% 64%, 0% 48%, 
+                12% 33%, 2% 16%, 21% 19%, 23% 0%, 39% 13%
+            );
+        }
+
+        /* Comic Pop Animation */
+        .comic-pop {
+            animation: comicPop 0.45s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+        @keyframes comicPop {
+            0% { transform: scale(0.2) rotate(-12deg); opacity: 0; }
+            70% { transform: scale(1.1) rotate(4deg); opacity: 1; }
+            100% { transform: scale(1) rotate(0deg); opacity: 1; }
+        }
+
+        /* Fullscreen Canvas Container */
+        #canvas-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+        }
+
+        /* Flashing Sunburst Transition Canvas Overlay */
+        #sunburst-flash {
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 30;
+            opacity: 0;
+            transition: opacity 0.2s ease-out;
+        }
+    </style>
+</head>
+<body class="h-full bg-[#8CE600] text-black font-montserrat overflow-hidden select-none">
+
+    <!-- 3D Three.js WebGL Scene Canvas -->
+    <div id="canvas-container"></div>
+
+    <!-- Visual Sunburst Flash Screen Effect -->
+    <div id="sunburst-flash" class="bg-y2kYellow"></div>
+
+    <!-- Direct Scene HUD Elements Layer -->
+    <div class="relative z-20 min-h-full flex flex-col justify-between p-4 sm:p-6 max-w-6xl mx-auto pointer-events-none">
+        
+        <!-- Header / Status Indicator -->
+        <header class="flex justify-between items-center py-2 px-4 pointer-events-auto">
+            <div class="flex items-center space-x-3 bg-white/80 border-3 border-black p-2 px-4 rounded-2xl shadow-[4px_4px_0px_#000]">
+                <div class="w-9 h-9 bg-y2kYellow border-2 border-black flex items-center justify-center comic-burst-bg shadow-[2px_2px_0px_#000]">
+                    <span class="font-y2k text-black text-[10px] font-black">Y2K</span>
+                </div>
+                <div>
+                    <h1 class="font-y2k text-lg sm:text-xl text-black leading-none drop-shadow-[2px_2px_0px_#B5F500]">
+                        GAME GRIP
+                    </h1>
+                    <p class="text-[9px] font-y2k text-black/80 tracking-widest uppercase">Motion Calibrator</p>
+                </div>
+            </div>
+
+            <div id="badge-mode" class="hidden px-4 py-1.5 rounded-full bg-y2kYellow border-3 border-black font-y2k text-xs text-black shadow-[4px_4px_0px_#000]">
+                MODE: <span id="label-game-mode" class="text-y2kMagenta">MINECRAFT</span>
+            </div>
+        </header>
+
+        <!-- Main Scene Overlay Controls -->
+        <main class="flex-grow flex items-center justify-center pointer-events-auto my-auto">
+            
+            <!-- PAGE 1: TITLE BURST & FLOATING GAME SELECTION BUTTONS -->
+            <div id="screen-page1" class="w-full max-w-lg text-center comic-pop">
+                <div class="mx-auto w-72 sm:w-96 h-36 bg-y2kYellow border-4 border-black comic-burst-bg flex flex-col items-center justify-center shadow-[8px_8px_0px_#000] mb-8 p-4">
+                    <h2 class="pop-text-title text-5xl sm:text-6xl leading-none rotate-[-2deg] py-1">
+                        GAME GRIP!
+                    </h2>
+                </div>
+
+                <!-- Game Selection Buttons -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-5 px-4">
+                    <button onclick="launchScene1('Minecraft')" class="y2k-btn p-4 rounded-2xl flex flex-col items-center justify-center group">
+                        <span class="font-y2k text-xl text-black">MINECRAFT</span>
+                        <span class="text-[10px] font-bold text-black/80">Sword & Block Motion</span>
+                    </button>
+
+                    <button onclick="launchScene1('Roblox')" class="y2k-btn-secondary p-4 rounded-2xl flex flex-col items-center justify-center group">
+                        <span class="font-y2k text-xl text-white">ROBLOX</span>
+                        <span class="text-[10px] font-bold text-white/90">Avatar Gesture Inertia</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- PAGE 3: HOLD STILL CALIBRATION -->
+            <div id="screen-page3" class="hidden w-full max-w-md text-center">
+                <div class="mx-auto w-80 h-28 bg-y2kLime border-4 border-black comic-burst-bg flex flex-col items-center justify-center shadow-[8px_8px_0px_#000] mb-6 p-2">
+                    <h2 id="hold-still-burst" class="pop-text-title text-4xl leading-none py-1">
+                        HOLD STILL!
+                    </h2>
+                    <span id="hold-countdown" class="font-y2k text-sm text-black mt-1">3... 2... 1...</span>
+                </div>
+
+                <div class="flex justify-center items-center space-x-3 mb-6 bg-white/90 p-3 rounded-2xl border-3 border-black shadow-[4px_4px_0px_#000]">
+                    <div class="w-10 h-10 rounded-full border-3 border-black bg-y2kYellow flex items-center justify-center font-y2k text-base animate-spin">
+                        ↻
+                    </div>
+                    <span id="hold-status-text" class="font-y2k text-xs text-y2kMagenta">KEEP DEVICE RESTING STILL</span>
+                </div>
+
+                <button id="btn-hold-action" onclick="runHoldCalibration()" class="y2k-btn w-full py-4 rounded-2xl text-base uppercase">
+                    START HOLD CAPTURE
+                </button>
+            </div>
+
+            <!-- PAGE 4: DO A SWING! (STAGE CONCERT) -->
+            <div id="screen-page4" class="hidden w-full max-w-md text-center">
+                <div class="mx-auto w-80 h-28 bg-y2kCyan border-4 border-black comic-burst-bg flex flex-col items-center justify-center shadow-[8px_8px_0px_#000] mb-6 p-2">
+                    <h2 id="swing-burst-title" class="pop-text-title text-4xl leading-none py-1">
+                        DO A SWING!
+                    </h2>
+                    <span id="swing-counter-text" class="font-y2k text-xs text-black mt-1">SWING DEVICE NOW!</span>
+                </div>
+
+                <div id="swing-progress-bar" class="w-full bg-white/90 h-6 rounded-full border-3 border-black overflow-hidden mb-6 p-0.5 shadow-[4px_4px_0px_#000]">
+                    <div id="swing-progress-fill" class="bg-y2kYellow h-full w-0 rounded-full transition-all duration-300"></div>
+                </div>
+
+                <button id="btn-swing-action" onclick="triggerSwingGesture()" class="y2k-btn w-full py-4 rounded-2xl text-lg uppercase">
+                    PERFORM SWING!
+                </button>
+            </div>
+
+            <!-- PAGE 5: TRANSITIONAL JUMP SCENE -->
+            <div id="screen-page5" class="hidden w-full max-w-md text-center">
+                <div class="mx-auto w-80 h-24 bg-y2kYellow border-4 border-black comic-burst-bg flex flex-col items-center justify-center shadow-[8px_8px_0px_#000] p-2">
+                    <h2 class="pop-text-title text-4xl leading-none py-1">
+                        JUMP!
+                    </h2>
+                    <span id="jump-state-label" class="font-y2k text-xs text-black">INERTIA SYNCING...</span>
+                </div>
+            </div>
+
+            <!-- PAGE 6: GAME GRIP IS READY! -->
+            <div id="screen-page6" class="hidden w-full max-w-lg text-center comic-pop">
+                <div class="mx-auto w-88 sm:w-96 h-36 bg-y2kYellow border-4 border-black comic-burst-bg flex flex-col items-center justify-center shadow-[8px_8px_0px_#000] mb-6 rotate-[-2deg] p-4">
+                    <h2 class="pop-text-title text-4xl sm:text-5xl leading-none py-1">
+                        GAME GRIP IS READY!
+                    </h2>
+                    <span class="font-y2k text-xs text-black mt-1">CONFIG LOCKED FOR <span id="final-game-title" class="text-y2kMagenta">MINECRAFT</span></span>
+                </div>
+
+                <!-- Floating Buttons -->
+                <div class="flex justify-center gap-4">
+                    <button onclick="restartCalibration()" class="y2k-btn px-6 py-3.5 rounded-2xl text-xs sm:text-sm">
+                        RE-CALIBRATE
+                    </button>
+                    <button onclick="exportConfig()" class="y2k-btn-secondary px-6 py-3.5 rounded-2xl text-xs sm:text-sm">
+                        EXPORT CONFIG
+                    </button>
+                </div>
+            </div>
+
+        </main>
+
+        <footer class="text-center py-1.5 bg-white/80 border-2 border-black rounded-xl font-y2k text-[10px] text-black shadow-[2px_2px_0px_#000] pointer-events-auto">
+            FRUTIGER METRO MOTION SUITE ★ Y2K ENGINE ONLINE
+        </footer>
+
+    </div>
+
+    <!-- Main JS Application Logic -->
+    <script>
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playSfx(freq, type = 'sine', duration = 0.15, gainVal = 0.25) {
+            if (!audioCtx) return;
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                gain.gain.setValueAtTime(gainVal, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + duration);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + duration);
+            } catch(e) {}
+        }
+
+        function playExplosionSfx() {
+            playSfx(150, 'sawtooth', 0.4, 0.4);
+            setTimeout(() => playSfx(80, 'square', 0.5, 0.4), 80);
+        }
+
+        let scene, camera, renderer, clock;
+        let windingArrowMesh;
+        let sceneBoomboxGroup;
+        let cityGroup, crosswalkGroup, pedestrians = [];
+        let stageGroup, musicNotesGroup = [], crowdSilhouettes = [];
+        let jumperSilhouette, jumperMaterial, sunburstPlane;
+        let finaleImageCompositionGroup, centerWoofer, leftAngledSpeaker, rightAngledSpeaker;
+
+        let activeGame = 'Minecraft';
+
+        function initThreeScene() {
+            const container = document.getElementById('canvas-container');
+            scene = new THREE.Scene();
+
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 3, 15);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setClearColor(0x8CE600, 1);
+            container.appendChild(renderer.domElement);
+
+            clock = new THREE.Clock();
+
+            // Crisp Sunburst Background
+            createRadialSunburst();
+
+            // Floor Grid
+            const gridHelper = new THREE.GridHelper(300, 60, 0x000000, 0x3B7A00);
+            gridHelper.position.y = -0.05;
+            scene.add(gridHelper);
+
+            // Construct 3D Scene Components
+            create3DWindingArrow();
+            create3DBoombox();
+            create3DCitySkyline();
+            create3DConcertStageWithAluminumTruss();
+            create3DJumperScene();
+            createY2KFinaleSpeakerComposition();
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        // Vector Sunburst
+        function createRadialSunburst() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 1024;
+            canvas.height = 1024;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#8CE600';
+            ctx.fillRect(0, 0, 1024, 1024);
+
+            const numRays = 32;
+            const cx = 512, cy = 512, radius = 600;
+            for (let i = 0; i < numRays; i++) {
+                ctx.beginPath();
+                ctx.moveTo(cx, cy);
+                const angle1 = (i * 2 * Math.PI) / numRays;
+                const angle2 = ((i + 0.5) * 2 * Math.PI) / numRays;
+                ctx.arc(cx, cy, radius, angle1, angle2);
+                ctx.closePath();
+                ctx.fillStyle = i % 2 === 0 ? '#B5F500' : '#3B7A00';
+                ctx.fill();
+            }
+
+            const texture = new THREE.CanvasTexture(canvas);
+            const geo = new THREE.PlaneGeometry(160, 160);
+            const mat = new THREE.MeshBasicMaterial({ map: texture, depthWrite: false });
+            const sunburstMesh = new THREE.Mesh(geo, mat);
+            sunburstMesh.position.set(0, 15, -200);
+            scene.add(sunburstMesh);
+        }
+
+        // Jet-Black Winding Snake Arrow
+        function create3DWindingArrow() {
+            const curve = new THREE.CatmullRomCurve3([
+                new THREE.Vector3(0, 0.2, -20),
+                new THREE.Vector3(-3, 0.2, -12),
+                new THREE.Vector3(4, 0.2, -4),
+                new THREE.Vector3(-4, 0.2, 4),
+                new THREE.Vector3(0, 0.2, 12)
+            ]);
+
+            const geometry = new THREE.TubeGeometry(curve, 60, 0.6, 8, false);
+            const material = new THREE.MeshBasicMaterial({ color: 0x000000 });
+            windingArrowMesh = new THREE.Mesh(geometry, material);
+
+            const wireGeo = new THREE.EdgesGeometry(geometry);
+            const wireMat = new THREE.LineBasicMaterial({ color: 0xB5F500, linewidth: 3 });
+            windingArrowMesh.add(new THREE.LineSegments(wireGeo, wireMat));
+
+            const headGeo = new THREE.ConeGeometry(1.5, 3, 8);
+            const headMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+            const headMesh = new THREE.Mesh(headGeo, headMat);
+            headMesh.rotation.x = Math.PI / 2;
+            headMesh.position.set(0, 0.2, 13.5);
+            
+            const headWire = new THREE.LineSegments(new THREE.EdgesGeometry(headGeo), new THREE.LineBasicMaterial({ color: 0xFFEA00, linewidth: 3 }));
+            headMesh.add(headWire);
+            
+            windingArrowMesh.add(headMesh);
+
+            // Hidden by default until button click
+            windingArrowMesh.visible = false;
+            windingArrowMesh.position.y = -8; // Below ground plane
+            windingArrowMesh.scale.set(0.01, 0.01, 0.01);
+
+            scene.add(windingArrowMesh);
+        }
+
+        // Realistic Detailed Boombox Object (Positioned Left of Center)
+        function create3DBoombox() {
+            sceneBoomboxGroup = new THREE.Group();
+
+            // Main Dark Metallic Casing
+            const bodyGeo = new THREE.BoxGeometry(6.5, 3.8, 2.2);
+            const bodyMat = new THREE.MeshStandardMaterial({ color: 0x181818, roughness: 0.3, metalness: 0.8 });
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.add(new THREE.LineSegments(new THREE.EdgesGeometry(bodyGeo), new THREE.LineBasicMaterial({ color: 0x000000, linewidth: 2 })));
+            sceneBoomboxGroup.add(body);
+
+            // Chrome Trim Faceplate
+            const faceTrim = new THREE.Mesh(
+                new THREE.BoxGeometry(6.2, 3.5, 0.1),
+                new THREE.MeshStandardMaterial({ color: 0xD0D0D0, roughness: 0.2, metalness: 0.9 })
+            );
+            faceTrim.position.set(0, 0, 1.08);
+            sceneBoomboxGroup.add(faceTrim);
+
+            // Realistic Dual Speaker Assemblies
+            const coneMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.4 });
+            const chromeRingMat = new THREE.MeshStandardMaterial({ color: 0xFFFFFF, metalness: 0.95, roughness: 0.1 });
+            const centerDustCapMat = new THREE.MeshBasicMaterial({ color: 0xB5F500 });
+
+            function createSpeakerAssembly() {
+                const spkGroup = new THREE.Group();
+                const outerRing = new THREE.Mesh(new THREE.TorusGeometry(1.05, 0.08, 12, 24), chromeRingMat);
+                const cone = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 0.3, 0.35, 24), coneMat);
+                cone.rotation.x = Math.PI / 2;
+                const dustCap = new THREE.Mesh(new THREE.SphereGeometry(0.35, 16, 16), centerDustCapMat);
+                dustCap.scale.set(1, 1, 0.4);
+                dustCap.position.z = 0.18;
+                spkGroup.add(outerRing, cone, dustCap);
+                return spkGroup;
+            }
+
+            const leftSpeaker = createSpeakerAssembly();
+            leftSpeaker.position.set(-1.9, -0.2, 1.15);
+
+            const rightSpeaker = createSpeakerAssembly();
+            rightSpeaker.position.set(1.9, -0.2, 1.15);
+
+            sceneBoomboxGroup.add(leftSpeaker, rightSpeaker);
+
+            // Cassette Tape Deck & Window
+            const cassetteDeck = new THREE.Mesh(
+                new THREE.BoxGeometry(1.8, 1.2, 0.05),
+                new THREE.MeshBasicMaterial({ color: 0x050505 })
+            );
+            cassetteDeck.position.set(0, -0.2, 1.16);
+            sceneBoomboxGroup.add(cassetteDeck);
+
+            // Top Handle
+            const handleTop = new THREE.Mesh(new THREE.BoxGeometry(4, 0.3, 0.4), bodyMat);
+            handleTop.position.set(0, 2.3, 0);
+            const handleLeft = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.6, 0.4), bodyMat);
+            handleLeft.position.set(-1.85, 2.0, 0);
+            const handleRight = handleLeft.clone();
+            handleRight.position.x = 1.85;
+            sceneBoomboxGroup.add(handleTop, handleLeft, handleRight);
+
+            // Metallic Dials & Buttons
+            for (let i = -2; i <= 2; i++) {
+                const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.25, 12), chromeRingMat);
+                knob.rotation.x = Math.PI / 2;
+                knob.position.set(i * 0.7, 1.4, 1.15);
+                sceneBoomboxGroup.add(knob);
+            }
+
+            // Positioned slightly to the LEFT of center
+            sceneBoomboxGroup.position.set(-3.0, 2.0, -22);
+            scene.add(sceneBoomboxGroup);
+        }
+
+        // City Skyline
+        function create3DCitySkyline() {
+            cityGroup = new THREE.Group();
+            for (let i = -4; i <= 4; i++) {
+                if (i === 0) continue;
+                const h = 12 + Math.random() * 14;
+                const bMesh = new THREE.Mesh(new THREE.BoxGeometry(4, h, 4), new THREE.MeshBasicMaterial({ color: 0x000000 }));
+                bMesh.position.set(i * 7, h / 2, -60);
+                cityGroup.add(bMesh);
+            }
+
+            const towerGroup = new THREE.Group();
+            const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 1.2, 32, 12), new THREE.MeshBasicMaterial({ color: 0x000000 }));
+            shaft.position.y = 16;
+            const pod = new THREE.Mesh(new THREE.SphereGeometry(2.5, 12, 8), new THREE.MeshBasicMaterial({ color: 0x000000 }));
+            pod.scale.set(1, 0.5, 1);
+            pod.position.y = 22;
+            const spire = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.3, 10, 8), new THREE.MeshBasicMaterial({ color: 0x000000 }));
+            spire.position.y = 29;
+            towerGroup.add(shaft, pod, spire);
+            towerGroup.position.set(0, 0, -60);
+            cityGroup.add(towerGroup);
+
+            crosswalkGroup = new THREE.Group();
+            for (let z = 0; z < 10; z++) {
+                const stripe = new THREE.Mesh(new THREE.PlaneGeometry(8, 0.8), new THREE.MeshBasicMaterial({ color: 0xFFFFFF, side: THREE.DoubleSide }));
+                stripe.rotation.x = -Math.PI / 2;
+                stripe.position.set(-25, 0.02, -30 - z * 2);
+                crosswalkGroup.add(stripe);
+            }
+
+            const pedTex = createStickPersonTexture();
+            const pedMat = new THREE.MeshBasicMaterial({ map: pedTex, transparent: true, side: THREE.DoubleSide });
+            for (let i = 0; i < 6; i++) {
+                const ped = new THREE.Mesh(new THREE.PlaneGeometry(2.5, 3.5), pedMat);
+                ped.position.set(-28 + i * 2, 1.75, -35 + (i % 2) * 3);
+                pedestrians.push(ped);
+                crosswalkGroup.add(ped);
+            }
+
+            cityGroup.add(crosswalkGroup);
+            cityGroup.visible = false;
+            scene.add(cityGroup);
+        }
+
+        // Metallic Aluminum Box Trussing for Concert Stage
+        function create3DConcertStageWithAluminumTruss() {
+            stageGroup = new THREE.Group();
+
+            const aluminumMat = new THREE.MeshStandardMaterial({
+                color: 0xCCCCCC,
+                metalness: 0.95,
+                roughness: 0.25,
+            });
+
+            const light = new THREE.DirectionalLight(0xFFFFFF, 1.2);
+            light.position.set(5, 15, -90);
+            stageGroup.add(light);
+            stageGroup.add(new THREE.AmbientLight(0xFFFFFF, 0.6));
+
+            function createTrussSegment(length) {
+                const truss = new THREE.Group();
+                const r = 0.08;
+                for (let x of [-0.5, 0.5]) {
+                    for (let y of [-0.5, 0.5]) {
+                        const rail = new THREE.Mesh(new THREE.CylinderGeometry(r, r, length, 8), aluminumMat);
+                        rail.position.set(x, 0, y);
+                        truss.add(rail);
+                    }
+                }
+                const bracesCount = Math.floor(length / 1.2);
+                for (let i = 0; i < bracesCount; i++) {
+                    const brace = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.7, r * 0.7, 1.4, 8), aluminumMat);
+                    brace.rotation.z = Math.PI / 4;
+                    brace.position.set(0, -length / 2 + (i + 0.5) * 1.2, 0);
+                    truss.add(brace);
+                }
+                return truss;
+            }
+
+            const topTruss = createTrussSegment(26);
+            topTruss.rotation.z = Math.PI / 2;
+            topTruss.position.set(0, 13, -100);
+
+            const leftTruss = createTrussSegment(13);
+            leftTruss.position.set(-12, 6.5, -100);
+
+            const rightTruss = createTrussSegment(13);
+            rightTruss.position.set(12, 6.5, -100);
+
+            stageGroup.add(topTruss, leftTruss, rightTruss);
+
+            const stageFloor = new THREE.Mesh(new THREE.BoxGeometry(24, 1, 10), new THREE.MeshBasicMaterial({ color: 0x222222 }));
+            stageFloor.position.set(0, 0.5, -100);
+            stageGroup.add(stageFloor);
+
+            const guitarMesh = new THREE.Mesh(new THREE.PlaneGeometry(3, 5), new THREE.MeshBasicMaterial({ map: createGuitarTexture(), transparent: true }));
+            guitarMesh.position.set(-4, 3.5, -99);
+            stageGroup.add(guitarMesh);
+
+            const micStand = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 4, 8), new THREE.MeshBasicMaterial({ color: 0x000000 }));
+            micStand.position.set(0, 3, -98);
+            stageGroup.add(micStand);
+
+            const crowdMat = new THREE.MeshBasicMaterial({ map: createStickPersonTexture(), transparent: true });
+            for (let i = 0; i < 12; i++) {
+                const person = new THREE.Mesh(new THREE.PlaneGeometry(2, 3), crowdMat);
+                person.position.set(-10 + i * 1.8, 1.5, -92 + (i % 2));
+                crowdSilhouettes.push(person);
+                stageGroup.add(person);
+            }
+
+            stageGroup.visible = false;
+            scene.add(stageGroup);
+        }
+
+        // Jump Scene Setup
+        function create3DJumperScene() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256; canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#000000';
+            ctx.beginPath(); ctx.arc(128, 40, 18, 0, Math.PI * 2); ctx.fill();
+            ctx.fillRect(116, 60, 24, 90);
+            ctx.lineWidth = 10; ctx.beginPath();
+            ctx.moveTo(116, 70); ctx.lineTo(80, 130);
+            ctx.moveTo(140, 70); ctx.lineTo(176, 130);
+            ctx.moveTo(120, 150); ctx.lineTo(100, 240);
+            ctx.moveTo(136, 150); ctx.lineTo(156, 240); ctx.stroke();
+
+            jumperMaterial = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(canvas), transparent: true, opacity: 0 });
+            jumperSilhouette = new THREE.Mesh(new THREE.PlaneGeometry(4, 5), jumperMaterial);
+            jumperSilhouette.position.set(0, 2.5, -140);
+            scene.add(jumperSilhouette);
+
+            const burstCanvas = document.createElement('canvas');
+            burstCanvas.width = 256; burstCanvas.height = 256;
+            const bCtx = burstCanvas.getContext('2d');
+            bCtx.fillStyle = '#FFEA00';
+            bCtx.beginPath(); bCtx.arc(128, 128, 100, 0, Math.PI * 2); bCtx.fill();
+
+            sunburstPlane = new THREE.Mesh(new THREE.PlaneGeometry(8, 8), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(burstCanvas), transparent: true, opacity: 0 }));
+            sunburstPlane.position.set(0, 4, -141);
+            scene.add(sunburstPlane);
+        }
+
+        function setJumperPose(poseType) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 256; canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#000000'; ctx.lineWidth = 12;
+            if (poseType === 'jump') {
+                ctx.beginPath(); ctx.arc(128, 40, 18, 0, Math.PI * 2); ctx.fill();
+                ctx.fillRect(116, 60, 24, 70); ctx.beginPath();
+                ctx.moveTo(116, 70); ctx.lineTo(50, 40);
+                ctx.moveTo(140, 70); ctx.lineTo(200, 40);
+                ctx.moveTo(120, 130); ctx.lineTo(70, 200);
+                ctx.moveTo(136, 130); ctx.lineTo(220, 110); ctx.stroke();
+            }
+            jumperMaterial.map = new THREE.CanvasTexture(canvas);
+            jumperMaterial.needsUpdate = true;
+        }
+
+        // Y2K Finale Speaker Assembly Reconstruction
+        function createY2KFinaleSpeakerComposition() {
+            finaleImageCompositionGroup = new THREE.Group();
+
+            const wooferFrameGeo = new THREE.CylinderGeometry(3.5, 3.5, 0.8, 32);
+            const wooferFrameMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+            const wooferFrame = new THREE.Mesh(wooferFrameGeo, wooferFrameMat);
+            wooferFrame.rotation.x = Math.PI / 2;
+
+            const ringGeo = new THREE.RingGeometry(2.2, 3.2, 32);
+            const ringMat = new THREE.MeshBasicMaterial({ color: 0xFFFFFF, side: THREE.DoubleSide });
+            const whiteRing = new THREE.Mesh(ringGeo, ringMat);
+            whiteRing.position.z = 0.42;
+
+            const centerConeGeo = new THREE.CylinderGeometry(1.5, 0.4, 0.6, 32);
+            const centerConeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
+            centerWoofer = new THREE.Mesh(centerConeGeo, centerConeMat);
+            centerWoofer.rotation.x = Math.PI / 2;
+            centerWoofer.position.z = 0.5;
+
+            const centerWooferAssembly = new THREE.Group();
+            centerWooferAssembly.add(wooferFrame, whiteRing, centerWoofer);
+            centerWooferAssembly.position.set(0, 0, 0);
+
+            const cabGeo = new THREE.BoxGeometry(2.5, 4.5, 2);
+            const cabMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+            leftAngledSpeaker = new THREE.Mesh(cabGeo, cabMat);
+            leftAngledSpeaker.position.set(-2.8, 2.8, -0.5);
+            leftAngledSpeaker.rotation.z = 0.35;
+
+            const speakerCone1 = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.2, 0.4, 16), new THREE.MeshBasicMaterial({ color: 0xB5F500 }));
+            speakerCone1.rotation.x = Math.PI / 2;
+            speakerCone1.position.set(0, 0.8, 1.1);
+            leftAngledSpeaker.add(speakerCone1);
+
+            rightAngledSpeaker = leftAngledSpeaker.clone();
+            rightAngledSpeaker.position.set(2.8, 2.8, -0.5);
+            rightAngledSpeaker.rotation.z = -0.35;
+
+            const flourishGroup = new THREE.Group();
+            for (let i = 0; i < 12; i++) {
+                const circleGeo = new THREE.RingGeometry(1 + i * 0.4, 1.2 + i * 0.4, 32);
+                const circleMat = new THREE.MeshBasicMaterial({ color: i % 2 === 0 ? 0x3B7A00 : 0xB5F500, side: THREE.DoubleSide });
+                const circleMesh = new THREE.Mesh(circleGeo, circleMat);
+                circleMesh.position.set((i % 2 === 0 ? -1 : 1) * (2 + i * 0.3), -1 - i * 0.1, -1);
+                flourishGroup.add(circleMesh);
+            }
+            
+            finaleImageCompositionGroup.add(flourishGroup, centerWooferAssembly, leftAngledSpeaker, rightAngledSpeaker);
+            finaleImageCompositionGroup.position.set(0, 3, -180);
+            finaleImageCompositionGroup.visible = false;
+            scene.add(finaleImageCompositionGroup);
+        }
+
+        // Scene Launch Sequence: Arrow pops UP from ground & camera moves BACKWARDS
+        function launchScene1(gameMode) {
+            activeGame = gameMode;
+            playSfx(523.25, 'triangle', 0.2, 0.3);
+            document.getElementById('label-game-mode').innerText = gameMode.toUpperCase();
+            document.getElementById('badge-mode').classList.remove('hidden');
+            document.getElementById('screen-page1').classList.add('hidden');
+
+            // 1. Reveal Arrow & Animate UP out of green floor with bounce
+            windingArrowMesh.visible = true;
+            gsap.to(windingArrowMesh.scale, { x: 1, y: 1, z: 1, duration: 0.5, ease: "back.out(1.7)" });
+            gsap.to(windingArrowMesh.position, {
+                y: 0,
+                duration: 0.8,
+                ease: "bounce.out"
+            });
+
+            // 2. Snake arrow forward towards viewer
+            gsap.to(windingArrowMesh.position, {
+                z: 25,
+                delay: 0.3,
+                duration: 2.5,
+                ease: "power2.in"
+            });
+
+            // 3. Camera moves BACKWARDS along Z-axis down the path
+            gsap.to(camera.position, {
+                z: 35,
+                y: 5,
+                duration: 3.2,
+                ease: "power2.inOut",
+                onUpdate: () => camera.lookAt(-1.5, 1.8, -22),
+                onComplete: () => {
+                    triggerSunburstFlash();
+                    playExplosionSfx();
+
+                    setTimeout(() => {
+                        windingArrowMesh.visible = false;
+                        sceneBoomboxGroup.visible = false;
+                        cityGroup.visible = true;
+
+                        // Maintain backward camera orientation for next scene
+                        camera.position.set(0, 4, -15);
+                        camera.lookAt(0, 10, -60);
+
+                        document.getElementById('screen-page3').classList.remove('hidden');
+                    }, 200);
+                }
+            });
+        }
+
+        function runHoldCalibration() {
+            playSfx(440, 'sine', 0.2, 0.3);
+            document.getElementById('btn-hold-action').disabled = true;
+
+            let count = 3;
+            const timer = setInterval(() => {
+                count--;
+                if (count > 0) {
+                    document.getElementById('hold-countdown').innerText = `${count}...`;
+                    playSfx(440 + (3 - count) * 100, 'sine', 0.15, 0.3);
+                } else {
+                    clearInterval(timer);
+                    document.getElementById('hold-countdown').innerText = "DONE!";
+                    document.getElementById('hold-status-text').innerText = "BASELINE LOCKED!";
+                    playSfx(880, 'triangle', 0.4, 0.4);
+
+                    setTimeout(() => {
+                        triggerSunburstFlash();
+                        cityGroup.visible = false;
+                        stageGroup.visible = true;
+
+                        camera.position.set(0, 4, -80);
+                        camera.lookAt(0, 4, -100);
+
+                        document.getElementById('screen-page3').classList.add('hidden');
+                        document.getElementById('screen-page4').classList.remove('hidden');
+                    }, 1000);
+                }
+            }, 800);
+        }
+
+        let swingCount = 0;
+        function triggerSwingGesture() {
+            swingCount++;
+            playSfx(300 + swingCount * 150, 'sawtooth', 0.25, 0.3);
+
+            gsap.to(camera.position, {
+                x: (swingCount % 2 === 0 ? 1 : -1) * 3,
+                duration: 0.2, yoyo: true, repeat: 1,
+                onComplete: () => camera.position.x = 0
+            });
+
+            for (let i = 0; i < 3; i++) spawn3DMusicNote();
+
+            document.getElementById('swing-progress-fill').style.width = `${(swingCount / 3) * 100}%`;
+
+            if (swingCount >= 3) {
+                document.getElementById('btn-swing-action').disabled = true;
+                document.getElementById('swing-counter-text').innerText = "RECORDED!";
+                playSfx(1046.5, 'square', 0.4, 0.4);
+
+                setTimeout(() => {
+                    triggerSunburstFlash();
+                    stageGroup.visible = false;
+
+                    camera.position.set(0, 3, -125);
+                    camera.lookAt(0, 3, -140);
+
+                    document.getElementById('screen-page4').classList.add('hidden');
+                    document.getElementById('screen-page5').classList.remove('hidden');
+
+                    gsap.to(jumperMaterial, {
+                        opacity: 1, duration: 1,
+                        onComplete: () => {
+                            setJumperPose('jump');
+                            playSfx(600, 'sawtooth', 0.3, 0.3);
+                            gsap.to(jumperSilhouette.position, {
+                                y: 6, duration: 0.5, ease: "power2.out",
+                                onComplete: () => {
+                                    gsap.to(sunburstPlane.material, { opacity: 1, duration: 0.15, yoyo: true, repeat: 1 });
+                                    setTimeout(() => {
+                                        triggerSunburstFlash();
+                                        jumperSilhouette.visible = false;
+                                        sunburstPlane.visible = false;
+                                        finaleImageCompositionGroup.visible = true;
+
+                                        camera.position.set(0, 3, -168);
+                                        camera.lookAt(0, 3, -180);
+
+                                        document.getElementById('final-game-title').innerText = activeGame.toUpperCase();
+                                        document.getElementById('screen-page5').classList.add('hidden');
+                                        document.getElementById('screen-page6').classList.remove('hidden');
+                                    }, 600);
+                                }
+                            });
+                        }
+                    });
+                }, 800);
+            }
+        }
+
+        function createStickPersonTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 128; canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#000000';
+            ctx.beginPath(); ctx.arc(64, 40, 20, 0, Math.PI * 2); ctx.fill();
+            ctx.fillRect(52, 65, 24, 80); ctx.lineWidth = 12; ctx.beginPath();
+            ctx.moveTo(52, 75); ctx.lineTo(20, 130);
+            ctx.moveTo(76, 75); ctx.lineTo(108, 130);
+            ctx.moveTo(56, 145); ctx.lineTo(30, 230);
+            ctx.moveTo(72, 145); ctx.lineTo(98, 230); ctx.stroke();
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        function createGuitarTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 128; canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#FF007F'; ctx.beginPath();
+            ctx.ellipse(64, 160, 35, 50, 0, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = '#000000'; ctx.fillRect(58, 20, 12, 120);
+            return new THREE.CanvasTexture(canvas);
+        }
+
+        function spawn3DMusicNote() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 128; canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#FFEA00'; ctx.font = '90px sans-serif';
+            ctx.fillText(Math.random() > 0.5 ? '♪' : '♫', 20, 90);
+
+            const noteMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(canvas), transparent: true, side: THREE.DoubleSide }));
+            noteMesh.position.set((Math.random() - 0.5) * 8, 3, -96);
+            scene.add(noteMesh);
+            musicNotesGroup.push({ mesh: noteMesh, vy: 0.1 + Math.random() * 0.1, life: 1.0 });
+        }
+
+        function triggerSunburstFlash() {
+            const flash = document.getElementById('sunburst-flash');
+            flash.style.opacity = '1';
+            setTimeout(() => flash.style.opacity = '0', 250);
+        }
+
+        function restartCalibration() {
+            location.reload();
+        }
+
+        function exportConfig() {
+            const configText = `GAME_GRIP_CONFIG_${activeGame.toUpperCase()}_SWING_SENS=0.984_ZERO_DRIFT=0.00`;
+            const tempInput = document.createElement('input');
+            tempInput.value = configText;
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempInput);
+            alert("Calibration Configuration copied to clipboard!");
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            const time = clock.getElapsedTime();
+
+            pedestrians.forEach((ped) => {
+                ped.position.x += 0.05;
+                if (ped.position.x > 15) ped.position.x = -25;
+            });
+
+            crowdSilhouettes.forEach((c, idx) => {
+                c.position.y = 1.5 + Math.abs(Math.sin(time * 6 + idx)) * 0.4;
+            });
+
+            if (centerWoofer) {
+                const scale = 1 + Math.sin(time * 8) * 0.08;
+                centerWoofer.scale.set(scale, scale, scale);
+            }
+
+            for (let i = musicNotesGroup.length - 1; i >= 0; i--) {
+                const item = musicNotesGroup[i];
+                item.mesh.position.y += item.vy;
+                item.mesh.position.x += Math.sin(time * 4) * 0.05;
+                item.life -= delta * 0.5;
+                if (item.life <= 0) {
+                    scene.remove(item.mesh);
+                    musicNotesGroup.splice(i, 1);
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        window.onload = function() {
+            initThreeScene();
+            animate();
+        };
+    </script>
+</body>
+</html>

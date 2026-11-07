@@ -1,0 +1,20 @@
+{
+  "game": "roblox",
+  "actions": [
+    {"name": "attack", "key": "left_click", "gesture_safe": true, "button_safe": true},
+    {"name": "jump", "key": "space", "gesture_safe": false, "button_safe": true},
+    {"name": "sprint", "key": "left_shift", "gesture_safe": true, "button_safe": true},
+    {"name": "interact", "key": "e", "gesture_safe": true, "button_safe": true},
+    {"name": "menu", "key": "escape", "gesture_safe": false, "button_safe": false}
+  ],
+  "action_sets": {
+    "combat": {
+      "gestures": {"swing": "attack"},
+      "buttons": {"btn0": "jump", "btn1": "sprint"}
+    },
+    "build": {
+      "gestures": {"swing": "interact"},
+      "buttons": {"btn0": "jump", "btn1": "sprint"}
+    }
+  }
+}
