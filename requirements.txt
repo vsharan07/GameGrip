@@ -1,0 +1,2 @@
+-r host/requirements.txt
+-r frontend/requirements.txt

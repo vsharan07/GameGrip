@@ -4,6 +4,62 @@ GameGrip is a clip-on motion controller: one ESP32, one MPU6050, and a Python ho
 
 The active path is serial. The older two-board UDP design is still in the tree (`firmware/upper`, `firmware/lower`, `host/legacy_udp_main.py`) and is not what `python3 main.py` runs.
 
+## Project layout
+
+The project lives directly at the root of the [GameGrip repository](https://github.com/vsharan07/GameGrip).
+
+| Folder | Contents |
+| --- | --- |
+| [frontend/](frontend/) | Calibration website and the Python bridge server |
+| [frontend/gamegrip/](frontend/gamegrip/) | GameGrip calibration page |
+| [frontend/Demos/](frontend/Demos/) | Baseball and boxing demos, including the offline HTML build |
+| [host/](host/) | Single-sensor controller, calibration, bindings, and tests |
+| [firmware/gamegrip/](firmware/gamegrip/) | Active ESP32 sensor sketch |
+| [docs/](docs/) | Hardware, wiring, flashing, and packet documentation |
+| [scripts/](scripts/) | Input checks and the legacy UDP simulator |
+
+## Run the GameGrip website and demos
+
+On Windows, open PowerShell and run:
+
+```powershell
+git clone https://github.com/vsharan07/GameGrip.git
+cd GameGrip
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe frontend\gamegrip_server.py
+```
+
+The calibration site opens at **http://127.0.0.1:8765/**. The sports demos are at
+**http://127.0.0.1:8765/demos/**. Pick **DEMOS**, calibrate, and use **LAUNCH DEMOS**
+to play with the sensor. Set `PORT` in [frontend/dtw_detector.py](frontend/dtw_detector.py)
+to your ESP32's serial port before starting calibration; its current default is
+`COM10`. Close Arduino Serial Monitor so the server can open the port.
+
+On macOS or Linux, use `python3 -m venv .venv`, `.venv/bin/python -m pip install -r requirements.txt`,
+and `.venv/bin/python frontend/gamegrip_server.py` after cloning.
+
+To open the sports demo without the server, open [frontend/Demos/index.html](frontend/Demos/index.html)
+locally and use its keyboard controls. The existing calibration page, demo visuals,
+music, and assets are included in their original folders.
+
+## Run the controller on Windows
+
+After installing the dependencies above, run from the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe host\main.py --port COM3 --game minecraft
+```
+
+Replace `COM3` with your board's port. This starts in dry-run. Add `--live` to send
+game input. The calibration and control commands are described below.
+
+To run all host tests from the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
 ## Hardware
 
 | Part | Role |
