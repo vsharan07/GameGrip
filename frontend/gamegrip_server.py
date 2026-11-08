@@ -10,9 +10,10 @@ What it does:
   * When you pick a game on the page, it opens the ESP32 serial port (the same
     PORT/BAUD as dtw_detector.py) and checks that motion data is coming in.
     If the ESP32 can't be found, the page shows an error.
-  * When the page reaches the "HOLD STILL!" step (the website's version of
-    "Press [Enter] when ready to start calibration..."), it runs
-    dtw_detector.calibrate() and then dtw_detector.detect(), unchanged.
+  * At HOLD STILL, Minecraft records still/right/down and saves the host's
+    mouse-look mapping. LAUNCH MINECRAFT enables desktop control after a
+    Python-timed countdown, using this same serial connection.
+  * DEMOS runs dtw_detector.calibrate()/detect(), unchanged.
   * Everything dtw_detector prints still goes to this terminal. Each line is
     also turned into an event and streamed to the page (Server-Sent Events),
     so the countdowns, recording windows, retries, "CALIBRATED!" and every
@@ -21,6 +22,7 @@ What it does:
 dtw_detector.py is imported, not modified.
 """
 
+import argparse
 import json
 import os
 import queue
@@ -30,10 +32,12 @@ import threading
 import time
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 import serial
 
 import dtw_detector as dtw
+from minecraft_controller import LookCalibrationError, MinecraftController
 
 HOST = "127.0.0.1"
 HTTP_PORT = 8765
@@ -73,9 +77,10 @@ def parse_line(line):
     return None
   if s.startswith("--- Step 1:"):
     return {"type": "step", "kind": "still", "step": 0}
-  m = re.match(r"--- Step 2: Calibration swing #(\d+) of 3", s)
+  m = re.match(r"--- Step 2: Calibration swing #(\d+) of (\d+)", s)
   if m:
-    return {"type": "step", "kind": "swing", "step": int(m.group(1))}
+    return {"type": "step", "kind": "swing", "step": int(m.group(1)),
+            "total_steps": int(m.group(2))}
   m = re.fullmatch(r"(\d+)\.\.\.", s)
   if m:
     return {"type": "count", "n": int(m.group(1))}
@@ -152,15 +157,18 @@ _session_lock = threading.Lock()
 class Session:
   _next_id = 1
 
-  def __init__(self, game):
+  def __init__(self, game, client_id=None):
     self.id = Session._next_id
     Session._next_id += 1
     self.game = game
+    self.client_id = client_id
     self.ser = None
     self.ready = threading.Event()
     self.stopped = False
     self.device = DEVICE_ID
     self.listening = False   # True once dtw_detector.detect() is running
+    self.controller = None
+    self.connected = False
     self.thread = threading.Thread(target=self._run, daemon=True)
     self.thread.gg_session = self
 
@@ -180,6 +188,8 @@ class Session:
   def stop(self):
     self.stopped = True
     self.ready.set()
+    if self.controller is not None:
+      self.controller.stop()
     if self.ser is not None:
       try:
         self.ser.close()  # makes a blocked read in calibrate()/detect() bail out
@@ -191,7 +201,7 @@ class Session:
     print(f"Connecting to ESP32 on {dtw.PORT}...", flush=True)
     try:
       self.ser = serial.Serial()
-      self.ser.port, self.ser.baudrate, self.ser.timeout = dtw.PORT, dtw.BAUD, 1
+      self.ser.port, self.ser.baudrate, self.ser.timeout = dtw.PORT, dtw.BAUD, 0.05
       # Opening a port normally pulses DTR/RTS, which reboots most ESP32 boards
       # (and the sketch then needs ~5 s for its WiFi attempt). Keep both low so
       # the board keeps streaming.
@@ -211,13 +221,8 @@ class Session:
     deadline = time.time() + PROBE_SECONDS
     while time.time() < deadline and not self.stopped:
       raw = self.ser.readline().decode("utf-8", errors="ignore").strip()
-      parts = raw.split(",")
-      if len(parts) == 6:
-        try:
-          [float(p) for p in parts]
-          return True
-        except ValueError:
-          pass
+      if dtw.parse_sample_line(raw) is not None:
+        return True
       if raw:
         last_text = raw
     if self.stopped:
@@ -234,6 +239,7 @@ class Session:
     try:
       if not self._open():
         return
+      self.connected = True
       print("\n=== MPU6050 Swing Calibrator & Detector ===", flush=True)
       print(f"Game: {self.game}. Waiting for the website to start calibration...",
             flush=True)
@@ -241,9 +247,12 @@ class Session:
       self.ready.wait()
       if self.stopped:
         return
-      tracker = dtw.calibrate(self.ser)
-      dtw.detect(self.ser, tracker)
-    except RuntimeError as e:
+      if self.game == "minecraft":
+        self._minecraft()
+      else:
+        tracker = dtw.calibrate(self.ser)
+        dtw.detect(self.ser, tracker)
+    except (RuntimeError, LookCalibrationError) as e:
       if not self.stopped:
         # dtw_detector's own errors (no samples, sensor too noisy, ...)
         title = "ESP32 NOT DETECTED" if "samples" in str(e) else "CALIBRATION FAILED"
@@ -252,19 +261,69 @@ class Session:
       if not self.stopped:
         self.error("ESP32 DISCONNECTED", f"Lost the ESP32 on {dtw.PORT}: {e}")
     finally:
+      self.connected = False
+      self.listening = False
+      if self.controller is not None:
+        self.controller.stop()
       if self.ser is not None:
         try:
           self.ser.close()
         except Exception:
           pass
 
+  def _minecraft(self):
+    self.controller = MinecraftController(self.send)
+    if self.stopped:
+      return
+    # Minecraft learns mouse axes and signs; sports keeps its three-swing
+    # rotation detector. Both use the existing, Python-timed website events.
+    for attempt in range(3):
+      print("--- Step 1: Hold still ---", flush=True)
+      dtw.countdown()
+      if self.stopped:
+        return
+      print(">>> Hold still... <<<", flush=True)
+      rest, _ = dtw.record(self.ser, dtw.REST_SECONDS)
+      print("Baseline captured.", flush=True)
+      gyro = rest[:, 3:6]
+      noise = float(dtw.np.percentile(dtw.np.linalg.norm(gyro - gyro.mean(axis=0), axis=1), 90))
+      if noise <= dtw.REST_MAX_NOISE:
+        print("Still check OK.", flush=True)
+        break
+      if attempt == 2:
+        raise RuntimeError("The toy kept moving during HOLD STILL. Put it down and use RUN IT BACK.")
+      print("Let's try that again. Hold the toy still.", flush=True)
+    recordings = []
+    for step, direction in enumerate(("right", "down"), 1):
+      print(f"--- Step 2: Calibration swing #{step} of 2 ---", flush=True)
+      print(f"Turn {direction} once, then hold that position. Return to centre before the next countdown.", flush=True)
+      dtw.countdown()
+      if self.stopped:
+        return
+      print(f">>> SWING #{step} NOW! <<<", flush=True)
+      samples, _ = dtw.record(self.ser, dtw.SWING_WINDOW_SECONDS)
+      recordings.append(samples)
+      print("Recorded.", flush=True)
+    document = self.controller.calibrate(rest, *recordings)
+    if self.stopped or document is None:
+      return
+    print(f"Mouse look learned: {document['mount']}", flush=True)
+    print("CALIBRATED!", flush=True)
+    self.controller.last_sample = time.monotonic()
+    self.ser.reset_input_buffer()
+    while not self.stopped and not self.controller.closed:
+      raw = self.ser.readline().decode("utf-8", errors="ignore")
+      self.controller.tick(time.monotonic(), raw)
 
-def start_session(game):
+
+def start_session(game, client_id=None):
   global _session
+  if game not in ("minecraft", "demos"):
+    raise ValueError("Choose Minecraft or Demos.")
   with _session_lock:
     if _session is not None:
       _session.stop()
-    _session = Session(game)
+    _session = Session(game, client_id=client_id)
     _session.thread.start()
     return _session.id
 
@@ -276,13 +335,38 @@ def status():
     if s is None or s.stopped:
       return {"listening": False, "devices": []}
     return {"listening": s.listening, "sid": s.id, "game": s.game,
-            "devices": [s.device] if s.listening else [], "port": dtw.PORT}
+            "devices": [s.device] if s.listening else [], "port": dtw.PORT,
+            "connected": s.connected,
+            "calibrated": bool(s.controller and s.controller.calibrated),
+            "controller_live": bool(s.controller and s.controller.live),
+            "controller_starting": bool(s.controller and s.controller.launch_at is not None)}
 
 
 def mark_ready(sid):
   with _session_lock:
     if _session is not None and _session.id == sid:
       _session.ready.set()
+      return True
+  return False
+
+
+def launch_controller(sid):
+  with _session_lock:
+    s = _session
+    if s is None or s.id != sid or s.stopped or not s.connected or s.controller is None:
+      raise RuntimeError("This calibration session is no longer connected. Use RUN IT BACK.")
+    if s.client_id:
+      with _clients_lock:
+        owner_connected = any(getattr(q, "client_id", None) == s.client_id for q in _clients)
+      if not owner_connected:
+        raise RuntimeError("The setup page disconnected. Use RUN IT BACK.")
+    s.controller.launch(time.monotonic())
+
+
+def stop_session(sid):
+  with _session_lock:
+    if _session is not None and _session.id == sid:
+      _session.stop()
       return True
   return False
 
@@ -336,12 +420,33 @@ class Handler(SimpleHTTPRequestHandler):
     return super().do_GET()
 
   def do_POST(self):
+    origin = self.headers.get("Origin")
+    if origin is not None and origin != "http://" + self.headers.get("Host", ""):
+      return self._json(403, {"error": "Use the local GameGrip setup page."})
     path = self.path.split("?")[0]
     if path == "/api/start":
-      game = str(self._body().get("game", ""))[:32]
-      return self._json(200, {"sid": start_session(game), "port": dtw.PORT})
-    if path == "/api/ready":
-      return self._json(200, {"ok": mark_ready(int(self._body().get("sid", 0)))})
+      body = self._body()
+      game = str(body.get("game", ""))[:32]
+      client_id = str(body.get("client", ""))[:64] or None
+      try:
+        sid = start_session(game, client_id)
+      except ValueError as e:
+        return self._json(400, {"error": str(e)})
+      return self._json(200, {"sid": sid, "port": dtw.PORT})
+    if path in ("/api/ready", "/api/launch", "/api/stop"):
+      try:
+        sid = int(self._body().get("sid", 0))
+      except (ValueError, TypeError):
+        return self._json(400, {"error": "Invalid session."})
+      if path == "/api/ready":
+        return self._json(200, {"ok": mark_ready(sid)})
+      if path == "/api/stop":
+        return self._json(200, {"ok": stop_session(sid)})
+      try:
+        launch_controller(sid)
+      except RuntimeError as e:
+        return self._json(409, {"error": str(e)})
+      return self._json(200, {"ok": True})
     self._json(404, {"error": "not found"})
 
   def _events(self):
@@ -350,6 +455,7 @@ class Handler(SimpleHTTPRequestHandler):
     self.send_header("Connection", "keep-alive")
     self.end_headers()
     q = queue.Queue()
+    q.client_id = parse_qs(urlsplit(self.path).query).get("client", [None])[0]
     with _clients_lock:
       _clients.append(q)
     try:
@@ -357,7 +463,7 @@ class Handler(SimpleHTTPRequestHandler):
       self.wfile.flush()
       while True:
         try:
-          ev = q.get(timeout=15)
+          ev = q.get(timeout=1)
           self.wfile.write(f"data: {json.dumps(ev)}\n\n".encode())
         except queue.Empty:
           self.wfile.write(b": ping\n\n")
@@ -367,6 +473,13 @@ class Handler(SimpleHTTPRequestHandler):
     finally:
       with _clients_lock:
         _clients.remove(q)
+      # Browser teardown does not reliably run pagehide/sendBeacon. The owned
+      # SSE connection is also a lease for Minecraft desktop input. Server-side
+      # pings detect a lost page without background-tab JavaScript timers.
+      with _session_lock:
+        s = _session
+        if s is not None and s.game == "minecraft" and q.client_id and s.client_id == q.client_id:
+          s.stop()
 
 
 class Server(ThreadingHTTPServer):
@@ -377,6 +490,11 @@ class Server(ThreadingHTTPServer):
 
 
 def main():
+  parser = argparse.ArgumentParser(description="Run the GameGrip calibration site and sports demos.")
+  parser.add_argument("--port", default=dtw.PORT, help="ESP32 serial port, e.g. COM3.")
+  parser.add_argument("--no-browser", action="store_true", help="Do not open a browser automatically.")
+  args = parser.parse_args()
+  dtw.PORT = args.port
   sys.stdout = TeeStdout(sys.stdout)
   server = Server((HOST, HTTP_PORT), Handler)
   server.daemon_threads = True
@@ -385,7 +503,7 @@ def main():
         flush=True)
   print(f"Sports demo: {url}demos/  (uses the strap once calibration is done)",
         flush=True)
-  if "--no-browser" not in sys.argv:
+  if not args.no_browser:
     threading.Timer(0.5, webbrowser.open, args=(url,)).start()
   try:
     server.serve_forever()
@@ -394,6 +512,7 @@ def main():
   finally:
     if _session is not None:
       _session.stop()
+    server.server_close()
 
 
 if __name__ == "__main__":

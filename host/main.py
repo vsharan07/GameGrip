@@ -33,6 +33,8 @@ def parse_args(argv=None):
     parser.add_argument("--user", default=None, help="Saved profile user. Used with --game.")
     parser.add_argument("--set", dest="action_set", default="combat", help="Action set (default combat).")
     parser.add_argument("--live", action="store_true", help="Send keys and mouse input. The default only prints them.")
+    parser.add_argument("--look-rotation", type=int, choices=(0, 90, 180, 270), default=None,
+                        help="Rotate mouse-look directions clockwise to match the mounting; saved for later runs.")
     return parser.parse_args(argv)
 
 
@@ -109,6 +111,8 @@ def main(argv=None):
 
     app = build_app(safety, window_s=settings.swing_window_seconds)
     app.listening = listening
+    if args.look_rotation is not None:
+        app.command("aim rotate %d" % args.look_rotation)
     if args.game:
         app.command("game %s %s" % (args.game, args.action_set))
         _apply_saved_profile(app, args.game, args.action_set, args.user)

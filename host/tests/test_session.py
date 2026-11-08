@@ -2,6 +2,8 @@
 
 import math
 
+import pytest
+
 from controls import ControlMap
 from input.keyboard_control import KeyboardController
 from input.mouse_aim import MouseController
@@ -84,24 +86,92 @@ def _fast():
     return (0.0, 0.0, 1.0, 250.0, 0.0, 0.0)
 
 
-def test_one_click_then_a_fast_swing_is_a_left_click():
+def test_one_click_then_a_large_swing_is_a_left_click():
     session, pressed, _keys = _session("left_click", live_mouse=True)
-    samples = _still(2) + _still(8) + [_fast()]
-    buttons = [1, 0] + [0] * 8 + [0]
+    samples = _still(2) + _still(8) + [_fast()] * 18
+    buttons = [1, 0] + [0] * (len(samples) - 2)
     events = _play(session, samples, buttons=buttons)
     assert session._look_paused is False
     assert [event["input"] for event in events if event["type"] == "injected"] == ["left_click"]
     assert pressed == ["left"]
 
 
-def test_two_clicks_then_a_fast_swing_is_a_right_click():
+def test_two_clicks_then_a_large_swing_is_a_right_click():
     session, pressed, _keys = _session("left_click", live_mouse=True)
-    samples = _still(4) + _still(8) + [_fast()]
-    buttons = [1, 0, 1, 0] + [0] * 8 + [0]
+    samples = _still(4) + _still(8) + [_fast()] * 18
+    buttons = [1, 0, 1, 0] + [0] * (len(samples) - 4)
     events = _play(session, samples, buttons=buttons)
     clicks = [event["input"] for event in events if event["type"] == "injected"]
     assert clicks == ["right_click"]
     assert pressed == ["right"]
+
+
+@pytest.mark.parametrize("movement", [
+    [_fast()],  # the old one-sample trigger
+    [(0, 0, 1, 1500, 0, 0)],  # a very fast spike
+    [(0, 0, 1, 800, 0, 0)] * 4,  # enough angle, but too brief
+    [(0, 0, 1, 300, 0, 0)] * 7,  # fast but only 42 degrees
+    [(0, 0, 1, 100, 0, 0)] * 100,  # broad, slow turn
+    [(0, 0, 1, 190, 0, 0)] * 35,  # large enough arc, below the speed requirement
+    [(0, 0, 1, 800 * (-1) ** i, 0, 0) for i in range(50)],  # small rapid shakes
+    ([_fast()] * 7 + _still(3)) * 4,  # separate small flicks must not add up
+], ids=["flick", "spike", "too-brief", "too-small", "slow-turn", "below-speed", "shake", "separate-flicks"])
+def test_small_or_slow_movements_do_not_spend_the_click_opportunity(movement):
+    session, pressed, _keys = _session("left_click", live_mouse=True)
+    samples = _still(5) + movement + _still(5)
+    events = _play(session, samples, buttons=[1, 0] + [0] * (len(samples) - 2))
+    assert not any(e["type"] == "injected" for e in events)
+    assert pressed == [] and session._armed == "left" and session._look_paused
+    # A deliberate follow-up still works, once, without another button press.
+    events = _play(session, [_fast()] * 18, start=len(samples) * .02, buttons=[0] * 18)
+    assert [e["input"] for e in events if e["type"] == "injected"] == ["left_click"]
+    assert pressed == ["left"] and not session._look_paused
+
+
+@pytest.mark.parametrize("hz", [25, 50, 100])
+@pytest.mark.parametrize("axis,sign", [(0, 1), (1, -1), (2, 1)])
+def test_large_swing_uses_elapsed_time_and_calibrated_bias(hz, axis, sign):
+    session, pressed, _keys = _session("left_click", live_mouse=True)
+    bias = (80.0, -60.0, 40.0)
+    session.controls.aim.bias_dps = bias
+    neutral = (0, 0, 1, *bias)
+    # Arm using the real button path, with a nonzero sensor resting bias.
+    for i, button in enumerate([1, 0, 0, 0, 0]):
+        session.push(neutral, i / hz, button=button)
+    gyro = list(bias)
+    gyro[axis] += sign * 300
+    for i in range(int(.4 * hz)):
+        session.push((0, 0, 1, *gyro), (5 + i) / hz, button=0)
+    assert pressed == ["left"]
+
+
+def test_sample_gap_cannot_be_counted_as_swing_motion():
+    session, pressed, _keys = _session("left_click", live_mouse=True)
+    _play(session, _still(5), buttons=[1, 0, 0, 0, 0])
+    # Two isolated readings across a gap would imply a large fictitious arc.
+    session.push(_fast(), .1, button=0)
+    session.push(_fast(), .7, button=0)
+    _play(session, [_fast()] * 18, start=.72, buttons=[0] * 18)
+    assert pressed == []
+    assert session._armed == "left"
+
+
+def test_dry_run_large_swing_logs_once_without_clicking():
+    session, pressed, _keys = _session("left_click")
+    samples = _still(5) + [_fast()] * 25
+    events = _play(session, samples, buttons=[1, 0] + [0] * (len(samples) - 2))
+    assert [e["input"] for e in events if e["type"] == "dry-run"] == ["left_click"]
+    assert not pressed and session._armed is None
+
+
+def test_disconnecting_during_a_partial_swing_discards_its_progress():
+    session, pressed, _keys = _session("left_click", live_mouse=True)
+    samples = _still(5) + [_fast()] * 8
+    _play(session, samples, buttons=[1, 0] + [0] * (len(samples) - 2))
+    assert session._armed == "left" and not pressed
+    session.release_inputs()
+    _play(session, _still(5) + [_fast()] * 18, start=.3, buttons=[0] * 23)
+    assert not pressed and session._armed is None
 
 
 def test_one_click_pauses_the_mouse():
@@ -133,10 +203,40 @@ def test_holding_the_button_holds_w_until_release():
     samples = _still(50)
     buttons = [1] * 40 + [0] * 10
     events = _play(session, samples, buttons=buttons)
-    assert len(keys) >= 5
-    assert set(keys) == {"w"}
-    assert set(released) == {"w"}
-    assert sum(1 for event in events if event["type"] == "injected" and event["input"] == "w") >= 5
+    assert keys == ["w"]
+    assert released == ["w"]
+    assert session.keyboard._held == set()
+    assert sum(1 for event in events if event["type"] == "injected" and event["input"] == "w") == 1
+
+
+def test_w_stays_pressed_during_hold_and_emergency_stop_releases_it():
+    session, _pressed, keys = _session("left_click", live_mouse=True)
+    released = []
+    session.keyboard._release = released.append
+    _play(session, _still(30), buttons=[1] * 30)
+    assert keys == ["w"]
+    assert released == []
+    assert session.keyboard._held == {"w"}
+    session.safety.stopped = True
+    session.push(_still(1)[0], 0.7, button=1)
+    assert released == ["w"]
+    assert not session._walking
+    assert not session._button_down
+
+
+def test_releasing_inputs_on_disconnect_cancels_hold_and_armed_click():
+    session, pressed, keys = _session("left_click", live_mouse=True)
+    released = []
+    session.keyboard._release = released.append
+    _play(session, _still(30), buttons=[1] * 30)
+    session.release_inputs()
+    assert keys == ["w"] and released == ["w"]
+    assert session.keyboard._held == set()
+    _play(session, _still(2), start=1.0, buttons=[1, 0])
+    assert session._armed == "left"
+    session.release_inputs()
+    session.push(_fast(), 2.0, button=0)
+    assert session._armed is None and pressed == []
 
 
 def test_saved_template_round_trip_reaches_the_session(tmp_path):

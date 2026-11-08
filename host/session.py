@@ -7,16 +7,12 @@ no template does not click. Live output is off until the caller sets it.
 
 from controls import is_mouse_input, mouse_button
 from input.mouse_aim import aim_delta, mapped_rates
-from sensor.features import gyro_mag
+from recognition.swing import SwingGate
 from sensor.motion import classify_direction
 
-# A shorter press is a click. Holding past this spams W until release.
+# A shorter press is a click. Holding past this holds W until release.
 CLICK_MAX_S = 0.3
 DOUBLE_CLICK_S = 0.45
-SPAM_INTERVAL_S = 0.08
-# A swing is any fast gyro after the mouse has been paused. It is not calibrated.
-FAST_DPS = 100.0
-QUIET_DPS = 35.0
 WALK_KEY = "w"
 
 
@@ -33,13 +29,11 @@ class PlaySession(object):
         self._last_sample_s = None
         self._button_down = False
         self._press_started = None
-        self._spamming = False
-        self._last_spam_s = None
-        self._spam_announced = False
+        self._walking = False
         self._last_short_s = None
         self._look_paused = False
         self._armed = None
-        self._saw_quiet = False
+        self._swing = SwingGate()
         self._motion_started_s = None
         self.look = {
             "direction": "neutral",
@@ -57,8 +51,17 @@ class PlaySession(object):
             self.release_inputs()
 
     def release_inputs(self):
-        self.mouse.release_all()
-        self.keyboard.release_all()
+        try:
+            self.mouse.release_all()
+        finally:
+            self.keyboard.release_all()
+        self._button_down = False
+        self._press_started = None
+        self._walking = False
+        self._last_short_s = None
+        self._armed = None
+        self._look_paused = False
+        self._swing.reset()
 
     def push(self, sample, now_s, button=None):
         """Return a list of event dicts. Does not inject when stopped or dry-run."""
@@ -68,6 +71,7 @@ class PlaySession(object):
             events.append({"type": "stopped"})
             return events
         if sample is None or not _finite_gyro(sample):
+            self._swing.reset()
             self.mouse.reset_motion()
             self._set_look("neutral", 0.0, 0.0, 0.0, True)
             return events
@@ -98,7 +102,7 @@ class PlaySession(object):
             })
         if button is not None:
             events.extend(self._update_button(bool(button), now_s))
-        events.extend(self._fast_click(sample))
+        events.extend(self._swing_click(sample, now_s))
         was_moving = self.segmenter._in_motion
         window = self.segmenter.push(sample)
         if self.segmenter._in_motion and not was_moving:
@@ -128,7 +132,7 @@ class PlaySession(object):
         }
 
     def _action_for(self, gesture_id, started_s, ended_s):
-        """Clicks come from a paused look plus a fast swing, not from a template."""
+        """Clicks come from a paused look plus a large swing, not from a template."""
         binding = self.controls.binding(gesture_id)
         if binding in ("left_click", "right_click"):
             return None
@@ -151,22 +155,32 @@ class PlaySession(object):
         if pressed and not self._button_down:
             self._button_down = True
             self._press_started = now_s
-            self._spamming = False
+            self._walking = False
             return events
         if pressed and self._button_down:
-            if self._press_started is not None and (now_s - self._press_started) >= CLICK_MAX_S:
-                self._spamming = True
-                self._spam_w(now_s, events)
+            if (not self._walking and self._press_started is not None
+                    and (now_s - self._press_started) >= CLICK_MAX_S):
+                self._walking = True
+                # A long hold cancels an earlier click opportunity.
+                self._armed = None
+                self._look_paused = False
+                self._last_short_s = None
+                if self.live:
+                    self.keyboard.press(WALK_KEY)
+                events.append({"type": "injected" if self.live else "dry-run",
+                               "input": WALK_KEY, "gesture": "hold"})
             return events
         if self._button_down:
             started = self._press_started
-            was_spam = self._spamming
+            was_walking = self._walking
             self._button_down = False
             self._press_started = None
-            self._spamming = False
-            self._last_spam_s = None
-            self._spam_announced = False
-            if not was_spam and started is not None and (now_s - started) < CLICK_MAX_S:
+            self._walking = False
+            if was_walking:
+                if self.live:
+                    self.keyboard.release(WALK_KEY)
+                events.append({"type": "released", "input": WALK_KEY, "gesture": "hold"})
+            if not was_walking and started is not None and (now_s - started) < CLICK_MAX_S:
                 self._count_click(now_s, events)
         return events
 
@@ -178,37 +192,20 @@ class PlaySession(object):
     def _arm(self, which, events):
         self._look_paused = True
         self._armed = which
-        self._saw_quiet = False
+        self._swing.reset()
         events.append({"type": "paused", "input": which})
 
-    def _spam_w(self, now_s, events):
-        if self._last_spam_s is not None and (now_s - self._last_spam_s) < SPAM_INTERVAL_S:
-            return
-        self._last_spam_s = now_s
-        if self.safety.stopped:
-            return
-        if not self.live:
-            if not self._spam_announced:
-                self._spam_announced = True
-                events.append({"type": "dry-run", "input": "w", "gesture": "hold"})
-            return
-        self.keyboard.tap(WALK_KEY)
-        events.append({"type": "injected", "input": "w", "gesture": "hold"})
-
-    def _fast_click(self, sample):
+    def _swing_click(self, sample, now_s):
         events = []
         if self._armed is None or self._button_down or self.safety.stopped:
+            self._swing.reset()
             return events
-        speed = gyro_mag(sample)
-        if speed < QUIET_DPS:
-            self._saw_quiet = True
-            return events
-        if not self._saw_quiet or speed < FAST_DPS:
+        gyro = tuple(sample[3 + index] - self.controls.aim.bias_dps[index] for index in range(3))
+        if not self._swing.update(gyro, now_s):
             return events
         which = self._armed
         self._armed = None
         self._look_paused = False
-        self._saw_quiet = False
         name = "left_click" if which == "left" else "right_click"
         if not self.live:
             events.append({"type": "dry-run", "input": name, "gesture": "swing"})

@@ -1,12 +1,8 @@
-"""Grouped look calibration.
+"""Directional mouse-look calibration (format version 3).
 
-Neutral is recorded first. Then four direction groups (left, right, up,
-down). Inside each group the host waits for the move, records slow, normal,
-and fast variations, and adds a large move only when the fast one was not
-already large. A failed take is explained and retried. Takes already
-accepted in that group stay accepted.
-
-Version 2. A version 1 file has to be recorded again.
+The active flow records still, right, then up in the terminal or down on
+the website. These learn the mounting axes, signs, and resting gyro bias.
+The older multi-speed movement helpers remain available below.
 """
 
 import json
@@ -142,8 +138,15 @@ def dominant_axis(samples, bias, floor_dps=8.0, skip=None):
     return None
 
 
-def build_document(rest_samples, right_samples, up_samples, created=None):
-    """Three recordings: still, turn right, tilt up."""
+def build_document(rest_samples, right_samples, up_samples, created=None,
+                   vertical_direction="up", axis_picker=dominant_axis):
+    """Three recordings: still, turn right, then tilt up (or down on the site).
+
+    axis_picker may select a single outward stroke from a recording that also
+    contains the return movement. The saved samples always remain unmodified.
+    """
+    if vertical_direction not in ("up", "down"):
+        raise ValueError("Vertical direction must be up or down.")
     if len(rest_samples) < 10:
         raise LookCalibrationError("Rest was not recorded.")
     bias = gyro_bias(rest_samples)
@@ -153,16 +156,17 @@ def build_document(rest_samples, right_samples, up_samples, created=None):
             "Rest is too noisy (%.0f deg/s). Hold the toy still and run look again." % noise
         )
     floor = max(8.0, noise * 3.0)
-    horizontal = dominant_axis(right_samples, bias, floor)
+    horizontal = axis_picker(right_samples, bias, floor)
     if horizontal is None:
         raise LookCalibrationError(
             "The right turn was too small to see. Turn the toy clearly to the right and run look again."
         )
-    vertical = dominant_axis(up_samples, bias, floor, skip=horizontal[0])
-    if vertical is None:
+    vertical = axis_picker(up_samples, bias, floor)
+    if vertical is None or vertical[0] == horizontal[0]:
         raise LookCalibrationError(
-            "The upward tilt was too small, or it used the same axis as left/right. "
-            "Tilt the toy up, not sideways, and run look again."
+            "The %s tilt was too small, or it used the same axis as left/right. "
+            "Tilt the toy %s and hold it there, then recalibrate."
+            % (vertical_direction, vertical_direction)
         )
     from sensor.motion import AXES
 
@@ -170,7 +174,8 @@ def build_document(rest_samples, right_samples, up_samples, created=None):
         "horizontal_axis": AXES[horizontal[0]],
         "vertical_axis": AXES[vertical[0]],
         "invert_horizontal": horizontal[1] < 0.0,
-        "invert_vertical": vertical[1] > 0.0,
+        "invert_vertical": (vertical[1] > 0.0 if vertical_direction == "up"
+                            else vertical[1] < 0.0),
         "horizontal_confidence": 1.0,
         "vertical_confidence": 1.0,
     }
@@ -187,7 +192,7 @@ def build_document(rest_samples, right_samples, up_samples, created=None):
         "groups": {
             "rest": {"samples": _stamp(rest_samples)},
             "right": {"samples": _stamp(right_samples)},
-            "up": {"samples": _stamp(up_samples)},
+            vertical_direction: {"samples": _stamp(up_samples)},
         },
     }
 
@@ -206,6 +211,8 @@ def apply_to_aim(document, aim):
     aim.vertical_axis = mount["vertical_axis"]
     aim.invert_horizontal = bool(mount["invert_horizontal"])
     aim.invert_vertical = bool(mount["invert_vertical"])
+    # A new mounting calibration already learns the physical orientation.
+    aim.rotation_deg = 0
     aim.bias_dps = tuple(document["bias_dps"])
     aim.mount_learned = True
     aim.enabled = True

@@ -42,6 +42,7 @@ Commands, then Enter:
   aim sensitivity <pixels per degree>
   aim axis <horizontal gx|gy|gz> <vertical gx|gy|gz>
   aim invert horizontal|vertical|both|none
+  aim rotate <0|90|180|270>  correct a sideways sensor mounting
   aim deadzone <deg/s>
   aim horizontal <pixels per degree>
   aim vertical <pixels per degree>
@@ -154,6 +155,7 @@ def run_loop(source, app, safety, stale_timeout_s, reopen):
         elif quality.is_down(now_s) and not announced_down:
             if quality.last_accept_s is not None or (now_s - started) >= stale_timeout_s:
                 print("Sensor data is missing. No input will be injected.")
+                app.session.release_inputs()
                 app.session.mouse.reset_motion()
                 app.session._set_look("neutral", 0.0, 0.0, 0.0, True)
                 announced_down = True
@@ -198,9 +200,11 @@ def _print_event(event):
         print("dry-run: would press %s" % event["input"], flush=True)
     elif kind == "injected":
         print("sent %s" % event["input"], flush=True)
+    elif kind == "released":
+        print("released %s" % event["input"], flush=True)
     elif kind == "paused":
         print(
-            "look paused. A fast swing is a %s click."
+            "look paused. A large, quick swing is a %s click."
             % ("right" if event.get("input") == "right" else "left"),
             flush=True,
         )
@@ -279,7 +283,7 @@ def _status(app):
     mode = "STOPPED" if app.session.safety.stopped else ("LIVE" if app.session.live else "DRY-RUN")
     aim = app.controls.aim
     print(
-        "mode=%s game=%s gestures=%d aim=%s axis=%s/%s horizontal=%.3f vertical=%.3f look=%s"
+        "mode=%s game=%s gestures=%d aim=%s axis=%s/%s rotation=%d horizontal=%.3f vertical=%.3f look=%s"
         % (
             mode,
             app.controls.game or "none",
@@ -287,6 +291,7 @@ def _status(app):
             "paused" if aim.paused else ("on" if aim.enabled else "off"),
             aim.horizontal_axis,
             aim.vertical_axis,
+            aim.rotation_deg,
             aim.horizontal_sensitivity,
             aim.vertical_sensitivity,
             app.session.look["direction"],
@@ -368,7 +373,7 @@ def _game(app, game, action_set):
 def _aim(app, parts):
     aim = app.controls.aim
     if not parts:
-        print("Use: aim on, aim off, aim pause, aim resume, aim sensitivity, aim horizontal, aim vertical, aim accel, aim deadzone, aim neutral, aim axis, aim invert")
+        print("Use: aim on, aim off, aim pause, aim resume, aim sensitivity, aim horizontal, aim vertical, aim accel, aim deadzone, aim neutral, aim axis, aim invert, aim rotate 0|90|180|270")
         return
     head = parts[0].lower()
     try:
@@ -396,6 +401,12 @@ def _aim(app, parts):
             aim.neutral_dps = float(parts[1])
         elif head == "deadzone" and len(parts) == 2:
             aim.deadzone_dps = float(parts[1])
+        elif head == "rotate" and len(parts) == 2:
+            if parts[1] not in ("0", "90", "180", "270"):
+                print("Use: aim rotate 0, 90, 180, or 270")
+                return
+            aim.rotation_deg = int(parts[1])
+            app.session.mouse.reset_motion()
         elif head == "axis" and len(parts) == 3:
             if parts[1] not in ("gx", "gy", "gz") or parts[2] not in ("gx", "gy", "gz"):
                 print("Axes are gx, gy, or gz.")
@@ -423,9 +434,12 @@ def _aim(app, parts):
     except ValueError:
         print("That value is not a number.")
         return
-    app.save()
+    if head == "rotate":
+        app.controls.save(app.controls_path)
+    else:
+        app.save()
     print(
-        "Aim %s. horizontal %s%s %.3f, vertical %s%s %.3f, accel %.2f, deadzone %.0f deg/s."
+        "Aim %s. horizontal %s%s %.3f, vertical %s%s %.3f, rotation %d degrees, accel %.2f, deadzone %.0f deg/s."
         % (
             "paused" if aim.paused else ("on" if aim.enabled else "off"),
             aim.horizontal_axis,
@@ -434,6 +448,7 @@ def _aim(app, parts):
             aim.vertical_axis,
             " inverted" if aim.invert_vertical else "",
             aim.vertical_sensitivity,
+            aim.rotation_deg,
             aim.acceleration,
             aim.deadzone_dps,
         )

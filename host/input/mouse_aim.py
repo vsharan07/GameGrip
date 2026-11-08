@@ -4,7 +4,10 @@ The axis map is configuration. gx/gy/gz are the chip axes in deg/s, not a
 claim about how the toy is mounted. Position is never integrated.
 """
 
+import sys
+
 _AXES = {"gx": 3, "gy": 4, "gz": 5}
+_windows_mouse = None
 
 
 class AimSettings(object):
@@ -26,6 +29,7 @@ class AimSettings(object):
         paused=False,
         bias_dps=None,
         mount_learned=False,
+        rotation_deg=0,
     ):
         self.enabled = bool(enabled)
         self.horizontal_axis = horizontal_axis
@@ -47,6 +51,9 @@ class AimSettings(object):
         self.paused = bool(paused)
         self.bias_dps = (0.0, 0.0, 0.0) if not bias_dps else tuple(float(value) for value in bias_dps)
         self.mount_learned = bool(mount_learned)
+        if isinstance(rotation_deg, bool) or rotation_deg not in (0, 90, 180, 270):
+            raise ValueError("Look rotation must be 0, 90, 180, or 270 degrees.")
+        self.rotation_deg = int(rotation_deg)
 
     def neutral_threshold(self):
         if self.neutral_dps is None:
@@ -71,6 +78,7 @@ class AimSettings(object):
             "paused": self.paused,
             "bias_dps": list(self.bias_dps),
             "mount_learned": self.mount_learned,
+            "rotation_deg": self.rotation_deg,
         }
 
     @classmethod
@@ -95,12 +103,7 @@ def aim_delta(sample, dt_s, settings, smooth=(0.0, 0.0)):
     """
     if settings.paused or not _finite_gyro(sample):
         return 0.0, 0.0, (0.0, 0.0)
-    horizontal = _axis(sample, settings.horizontal_axis, settings.bias_dps)
-    vertical = _axis(sample, settings.vertical_axis, settings.bias_dps)
-    if settings.invert_horizontal:
-        horizontal = -horizontal
-    if settings.invert_vertical:
-        vertical = -vertical
+    horizontal, vertical = mapped_rates(sample, settings)
     alpha = settings.smoothing
     if alpha <= 0.0:
         smoothed_h, smoothed_v = horizontal, vertical
@@ -227,7 +230,11 @@ class MouseController(object):
 
 
 def mapped_rates(sample, settings):
-    """Bias-subtracted, inverted gyro rates in deg/s. (horizontal, vertical)."""
+    """Bias-subtracted, inverted, mounting-rotated rates in deg/s.
+
+    Rotation is clockwise in screen coordinates (right/down are positive).
+    Apply it before smoothing and sensitivity so screen-axis tuning stays put.
+    """
     if settings.paused or not _finite_gyro(sample):
         return 0.0, 0.0
     horizontal = _axis(sample, settings.horizontal_axis, settings.bias_dps)
@@ -236,6 +243,12 @@ def mapped_rates(sample, settings):
         horizontal = -horizontal
     if settings.invert_vertical:
         vertical = -vertical
+    if settings.rotation_deg == 90:
+        return -vertical, horizontal
+    if settings.rotation_deg == 180:
+        return -horizontal, -vertical
+    if settings.rotation_deg == 270:
+        return vertical, -horizontal
     return horizontal, vertical
 
 
@@ -290,6 +303,19 @@ def post_relative_delta(dx, dy):
     outside the game is visible too. The point is kept on the main display
     so the cursor does not stick at the screen edge.
     """
+    if sys.platform == "win32":
+        from input.windows_mouse import WindowsMouse
+
+        global _windows_mouse
+        if _windows_mouse is None:
+            _windows_mouse = WindowsMouse()
+        _windows_mouse.move(int(dx), int(dy))
+        return
+    if sys.platform != "darwin":
+        from pynput.mouse import Controller
+
+        Controller().move(dx, dy)
+        return
     import Quartz
 
     source = Quartz.CGEventSourceCreate(Quartz.kCGEventSourceStateCombinedSessionState)

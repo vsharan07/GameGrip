@@ -106,11 +106,12 @@ def test_look_document_persists_and_distinguishes_scale(tmp_path):
     save_document(document, path)
     loaded = load_document(path)
     assert loaded["groups"]["right"]["samples"][0][0] == 0.0
-    aim = AimSettings(sensitivity=0.15, horizontal_sensitivity=0.15, vertical_sensitivity=0.15)
+    aim = AimSettings(sensitivity=0.15, horizontal_sensitivity=0.15, vertical_sensitivity=0.15, rotation_deg=90)
     from look_calibration import apply_to_aim
 
     apply_to_aim(loaded, aim)
     assert aim.mount_learned
+    assert aim.rotation_deg == 0
     assert aim.horizontal_sensitivity == 18.0
     assert aim.vertical_sensitivity == 14.0
     assert aim.invert_vertical is True

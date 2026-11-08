@@ -1,6 +1,6 @@
 # GameGrip
 
-GameGrip is a clip-on motion controller: one ESP32, one MPU6050, and a Python host. You perform a movement three times, the host stores a DTW template, and you map that gesture to a mouse click, a key, or relative mouse aim. Nothing is sent to the computer unless you pass `--live` or type `live` and then `LIVE`.
+GameGrip is a clip-on motion controller: one ESP32, one MPU6050, and a Python host. The website learns mouse-look from a still recording, a right turn, and a downward tilt. The terminal also supports recording gesture templates three times. Desktop input starts only after **LAUNCH MINECRAFT**, `--live`, or the terminal's `live` confirmation.
 
 The active path is serial. The older two-board UDP design is still in the tree (`firmware/upper`, `firmware/lower`, `host/legacy_udp_main.py`) and is not what `python3 main.py` runs.
 
@@ -20,6 +20,28 @@ The project lives directly at the root of the [GameGrip repository](https://gith
 
 ## Run the GameGrip website and demos
 
+For Minecraft, close the separate `host/main.py` controller first: only one app
+can use the ESP32's serial port. Start the server below, open Minecraft and a
+world, then choose **MINECRAFT** on the website:
+
+1. **HOLD STILL:** keep the sword steady for the baseline.
+2. **MOVE RIGHT:** turn it once to your right, then hold. Re-centre before the next recording.
+3. **MOVE DOWN:** tilt it down once, then hold.
+4. Press **LAUNCH MINECRAFT** and switch to your Minecraft world during the
+   five-second countdown. This enables the controller; it does not open the game executable.
+
+These recordings learn the gyro axes, their signs and the resting bias, including
+a sideways mounting. They save to `host/data/look.json` and
+`host/data/controls.json`. A new calibration resets the extra manual rotation to
+`0` so a previous `90`-degree correction is not applied twice. Failed recordings
+do not overwrite the previous calibration. Use **RUN IT BACK** to stop and retry.
+
+Press **Esc three times within one second** to stop. Closing or reloading the
+Minecraft setup page, disconnecting the sensor, a one-second stale stream, or
+shutting down the server releases held inputs. After a stop, recalibrate before
+launching again. Calibration itself sends no desktop input. Button controls use
+the existing host implementation and require a working button signal.
+
 On Windows, open PowerShell and run:
 
 ```powershell
@@ -27,14 +49,16 @@ git clone https://github.com/vsharan07/GameGrip.git
 cd GameGrip
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe frontend\gamegrip_server.py
+.\.venv\Scripts\python.exe frontend\gamegrip_server.py --port COM3
 ```
 
 The calibration site opens at **http://127.0.0.1:8765/**. The sports demos are at
 **http://127.0.0.1:8765/demos/**. Pick **DEMOS**, calibrate, and use **LAUNCH DEMOS**
-to play with the sensor. Set `PORT` in [frontend/dtw_detector.py](frontend/dtw_detector.py)
-to your ESP32's serial port before starting calibration; its current default is
-`COM10`. Close Arduino Serial Monitor so the server can open the port.
+to play with the sensor. Replace `COM3` with your ESP32's serial port.
+If `--port` is omitted, the server uses `PORT` in
+[frontend/dtw_detector.py](frontend/dtw_detector.py), currently `COM10`.
+Close Arduino Serial Monitor so the server can open the port. Both six-column
+motion streams and seven-column streams with the button state are accepted.
 
 On macOS or Linux, use `python3 -m venv .venv`, `.venv/bin/python -m pip install -r requirements.txt`,
 and `.venv/bin/python frontend/gamegrip_server.py` after cloning.
@@ -189,9 +213,18 @@ Then play:
 Wait for `mode=LIVE` and click the window you want to control.
 
 - Turning the toy moves the mouse.
-- Holding the button repeats W until you let go.
-- One button click pauses the mouse. A fast swing then left-clicks, and the mouse can move again.
-- Two quick clicks pause the mouse. A fast swing then right-clicks.
+- Holding the button for at least 0.3 seconds holds W continuously until you let go.
+- One button click pauses the mouse. A large, quick swing then left-clicks, and the mouse can move again.
+- Two quick clicks pause the mouse. A large, quick swing then right-clicks.
+
+An armed click requires about **60 degrees of net rotation**, a peak speed of
+at least **200 degrees/second**, and at least **0.12 seconds** of movement,
+completed within **0.8 seconds**. Start from still. A small flick, a single
+sensor spike, a slow turn, or repeated small back-and-forth shakes will not
+consume the click opportunity. These initial thresholds live in
+`host/recognition/swing.py`; they still need hands-on tuning once the button works.
+The detector uses the calibrated gyro bias and actual sample times. It shares
+the existing sensor loop with mouse-look and never sleeps to wait for a swing.
 
 ## Recognition
 
@@ -209,10 +242,24 @@ aim axis gx gy
 aim sensitivity 0.15
 aim deadzone 12
 aim invert horizontal
+aim rotate 90
 aim off
 ```
 
 `aim sensitivity` is pixels per degree. Motion is relative. There is a dead zone, an exponential smoother, and a maximum pointer speed. Aim is paused while a gesture is in progress so a swing is not also a mouse sweep. In dry-run the host computes the motion and does not move the pointer.
+
+If the sensor is mounted sideways on a sword, use `aim rotate 90` to rotate its
+mouse-look directions clockwise by one quarter turn. Choose `270` for the
+opposite direction, `180` for upside down, or `0` for the original mapping.
+This setting is saved as `aim.rotation_deg` in `host/data/controls.json`.
+Horizontal and vertical sensitivity still refer to the screen directions.
+A fresh `look` calibration learns the new mounting and resets this extra rotation to `0`.
+
+You can also choose the setting when starting the controller on Windows:
+
+```powershell
+.\.venv\Scripts\python.exe host\main.py --port COM3 --look-rotation 90 --live
+```
 
 ## Map a gesture to an action
 
@@ -245,9 +292,10 @@ Either one latches the emergency stop, releases held keys and mouse buttons, and
 
 ## Tests
 
-```bash
-cd host
-.venv/bin/python -m pytest -q tests
+From the repository root on Windows:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
 The suite does not open a serial port and does not send mouse or keyboard input. Controllers are mocked.
@@ -261,4 +309,4 @@ The suite does not open a serial port and does not send mouse or keyboard input.
 - Thresholds in `host/config/serial.json` (`onset_dps`, `min_threshold`, `match_margin`, aim sensitivity) are starting values. They have not been tuned on the toy.
 - The old UDP packet in `imuNumbers` mixed accelerometer values into quaternion fields, declared 44 bytes, and wrote 40. That packet is not the host contract.
 - USB serial is the transport. A wireless link can replace `open_serial` later.
-- This host has not been run against a flashed ESP32 in this pass. Unit tests cover the pipeline with synthetic samples.
+- Automated checks use synthetic recordings and mock desktop inputs. Verify the physical direction mapping and in-game mouse response with the actual sword after calibration.

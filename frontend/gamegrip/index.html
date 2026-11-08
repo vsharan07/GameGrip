@@ -1266,27 +1266,34 @@ const recBox = document.getElementById('recBox'), recBar = document.getElementBy
 const ABORT = Symbol('abort');
 let failed = false;
 const bridge = (() => {
-  const B = { sid: null, starting: false, handlers: new Set(), pending: [] };
+  const B = { sid: null, client: crypto.randomUUID(), starting: false, handlers: new Set(), pending: [] };
   const deliver = (ev) => B.handlers.forEach(f => f(ev));
   try {
-    new EventSource('/api/events').onmessage = (m) => {
+    const events = new EventSource('/api/events?client=' + encodeURIComponent(B.client));
+    events.onmessage = (m) => {
       let ev; try { ev = JSON.parse(m.data); } catch { return; }
       if (B.sid === null) { if (B.starting) B.pending.push(ev); return; }   // session id not back yet
       if (ev.sid === B.sid) deliver(ev);
     };
+    events.onerror = () => {
+      if (B.sid !== null) deliver({ type: 'error', title: 'CONNECTION LOST', message: 'The setup page lost its server connection. Press Esc three times to stop, then use RUN IT BACK.' });
+    };
   } catch (e) {}
   const post = (path, body) => fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+    .then(async r => { const data = await r.json(); if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status)); return data; });
   B.on = (f) => { B.handlers.add(f); return () => B.handlers.delete(f); };
   // resolves on the next event of `type`, rejects if the ESP32 errors first
   B.waitFor = (type) => new Promise((res, rej) => { const off = B.on(ev => { if (ev.type === type) { off(); res(ev); } else if (ev.type === 'error') { off(); rej(ABORT); } }); });
   B.start = async (game) => {
     B.starting = true;
-    const r = await post('/api/start', { game });
+    const r = await post('/api/start', { game, client: B.client });
     B.sid = r.sid; B.pending.splice(0).filter(ev => ev.sid === B.sid).forEach(deliver);
+    B.starting = false;
     return r;
   };
   B.ready = () => post('/api/ready', { sid: B.sid }).catch(() => {});   // = "Press [Enter]" in the terminal
+  B.launch = () => post('/api/launch', { sid: B.sid });
+  B.stop = () => post('/api/stop', { sid: B.sid });
   return B;
 })();
 const guard = async (p) => { const r = await p; if (failed) throw ABORT; return r; };
@@ -1314,6 +1321,20 @@ const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;
 bridge.on(ev => {
   if (ev.type === 'error') showError({ title: ev.title, message: esc(ev.message) });
   if (ev.type === 'swing') { emit('swing', { n: ev.n }); swingStarBurst(ev.colour); }
+  if (ev.type === 'controller-starting') {
+    cutShouts(); shout('SWITCH TO MINECRAFT!', { sub: 'OPEN YOUR WORLD · ESC ×3 TO STOP', hold: 0.7, size: 0.7 });
+  }
+  if (ev.type === 'controller-count') {
+    cutShouts(); shout(String(ev.n), { sub: 'SWITCH TO MINECRAFT · ESC ×3 TO STOP', hold: 0.5, size: 1.4 });
+  }
+  if (ev.type === 'controller-live') {
+    const button = document.getElementById('launchBtn'); button.disabled = true; button.textContent = 'CONTROLLER LIVE';
+    cutShouts(); shout('YOU’RE IN CONTROL!', { sub: 'ESC ×3 TO STOP · RUN IT BACK TO RECALIBRATE', hold: 1, size: 0.8 });
+  }
+  if (ev.type === 'controller-stopped') {
+    const button = document.getElementById('launchBtn'); button.disabled = true; button.textContent = 'CONTROLLER STOPPED';
+    cutShouts(); shout('CONTROLLER STOPPED', { sub: 'RUN IT BACK TO RECALIBRATE', hold: 1, size: 0.8 });
+  }
 });
 
 /* ---- calibration steps, driven line-by-line by dtw_detector's terminal output ---- */
@@ -1324,9 +1345,8 @@ const swingViews = [
   { pos: [3, 10, SZ + 39], look: [0, 4.5, SZ + 4] },
   { pos: [0, 3, 198], look: [-2, 1, 182] },
 ];
-// What each calibration recording is called on screen. The detector still records
-// "still" + 3 swings (internal steps 1-3); the player is shown HOLD STILL -> MOVE RIGHT -> MOVE DOWN.
-// Internal swing 3 is a silent extra MOVE DOWN that shares the MOVE DOWN chip.
+// Minecraft records still + right + down to learn mouse-look. Sports keeps its
+// three-swing detector, with the final two recordings sharing the DOWN chip.
 // chip = index into #steps, call = shown on the "3", count = sub-title on "2"/"1", go = shout when recording starts.
 const STEP_UI = {
   still: { chip: 0 },
@@ -1334,7 +1354,6 @@ const STEP_UI = {
   2: { chip: 2, call: 'MOVE DOWN!', count: 'MOVE DOWN IN', go: 'DOWN!' },
   3: { chip: 2, call: 'MOVE DOWN!', count: 'MOVE DOWN IN', go: 'DOWN!' },
 };
-const LAST_STEP = 3;   // internal swing count
 function toStage() {
   // hold-still is done: arrow curls + zooms off while the camera flies to the stage (inside swing 1's 3s countdown)
   curlArrow(new V3(-2.2, 3.6, 64));
@@ -1343,11 +1362,12 @@ function toStage() {
 }
 function calibrateFromPython() {
   return new Promise((resolve, reject) => {
-    let step = 0, kind = 'still', retry = false, lastShout = Promise.resolve(), detail = null;
+    let step = 0, kind = 'still', retry = false, lastStep = 3, lastShout = Promise.resolve(), detail = null;
     const statusShout = (text, opts) => { lastShout = shout(text, opts); };
     const off = bridge.on(ev => {
       switch (ev.type) {
         case 'step':                       // "--- Step 1 ..." / "--- Step 2: Calibration swing #n of 3 ---"
+          if (ev.total_steps) lastStep = ev.total_steps;
           step = ev.step; kind = ev.kind; setStep(kind === 'still' ? 0 : STEP_UI[step].chip, 'active');
           if (kind === 'swing' && step === 1) toStage();
           emit('countdown-start', { step, kind, durationMs: 3 * COUNT_MS });
@@ -1366,11 +1386,11 @@ function calibrateFromPython() {
           detail = { step, kind, durationMs: ms, game: window.GameGrip.game };
           emit('record-start', detail); sfx('rec');
           recBox.classList.remove('hidden2'); gsap.fromTo(recBar, { width: '0%' }, { width: '100%', duration: ms / 1000, ease: 'none' });
-          shout(still ? 'HOLD IT...' : STEP_UI[step].go, { hold: 1.0, size: 1.1, tilt: -9 });
+          shout(still ? 'HOLD IT...' : STEP_UI[step].go, { sub: !still && window.GameGrip.game === 'minecraft' ? 'TURN ONCE, THEN HOLD' : '', hold: 1.0, size: 1.1, tilt: -9 });
           if (still) {
             cam.idle = 0;
           } else {
-            sfx('whoosh'); if (step === 3) reveal('floor', 0.02); if (step === 2) reveal('sky', 0.04);
+            sfx('whoosh'); if (step === lastStep) reveal('floor', 0.02); if (step === 2) reveal('sky', 0.04);
             gsap.to(cam, { sway: 1, duration: 0.2 }); gsap.to(cam, { sway: 0, duration: 0.4, delay: ms / 1000 - 0.3 });
             const v = swingViews[step]; moveCam(v.pos, v.look, ms / 1000, 'power2.out');
             spawnNotes(new V3(cam.look.x, 4, cam.look.z + 8), 14, 9);
@@ -1385,8 +1405,8 @@ function calibrateFromPython() {
           // Python prints the next step's "3..." straight after this, so only the last one gets its own banner.
           // A chip shared by several recordings (MOVE DOWN) only ticks when its last recording is done.
           if (kind === 'swing') {
-            const s = step, chip = STEP_UI[s].chip, chipDone = s === LAST_STEP || STEP_UI[s + 1].chip !== chip;
-            if (s === LAST_STEP) { statusShout('RECORDED!', { hold: 0.4, size: 1.0, burst: true, tilt: 4 }); lastShout.then(() => setStep(chip, 'done')); }
+            const s = step, chip = STEP_UI[s].chip, chipDone = s === lastStep || STEP_UI[s + 1].chip !== chip;
+            if (s === lastStep) { statusShout('RECORDED!', { hold: 0.4, size: 1.0, burst: true, tilt: 4 }); lastShout.then(() => setStep(chip, 'done')); }
             else if (chipDone) setStep(chip, 'done');
           }
           break;
@@ -1509,6 +1529,7 @@ async function readyScene() {
   ]);
   sfx('boom'); flash(0.8); spawnConfetti(new V3(0, 5, RZ + 2), 90, 14);
   const el = document.createElement('div'); el.className = 'shout-wrap'; el.style.alignItems = 'start'; el.style.paddingTop = '7vh';
+  el._cut = () => el.remove();  // let Launch clear the persistent READY banner
   el.innerHTML = `<div class="shout-inner" style="--sz:.62">${burstSVG(999)}<div class="s-sub">CALIBRATION COMPLETE</div><div class="shout"><span class="s-back">GAME GRIP<br>IS READY!</span><span class="s-front">GAME GRIP<br>IS READY!</span></div></div>`;
   shoutLayer.appendChild(el);
   gsap.fromTo(el.firstChild, { scale: 3, rotation: -20, opacity: 0 }, { scale: 1, rotation: -5, opacity: 1, duration: 0.5, ease: 'back.out(2.2)' });
@@ -1550,12 +1571,26 @@ async function run(game) {
 
 document.querySelectorAll('#titleUI .pill').forEach(b => b.addEventListener('click', () => run(b.dataset.game), { once: true }));
 window.__gg = { cam, reveal, floorRun, readyScene, moveCam, jumper, plane, swingStarBurst, showError, initAudio: () => audio ??= initAudio() }; // dev hooks
-document.getElementById('againBtn').onclick = () => location.reload();
-document.getElementById('launchBtn').onclick = () => {
+document.getElementById('againBtn').onclick = async () => {
+  try { await bridge.stop(); location.reload(); }
+  catch (e) { showError({ title: 'COULD NOT STOP CONTROLLER', message: esc(e.message) + ' Press Esc three times to stop.' }); }
+};
+document.getElementById('launchBtn').onclick = async () => {
   emit('launch', { game: window.GameGrip.game });
   // the strap keeps streaming in gamegrip_server.py, so the demo picks it up on load
   if (window.GameGrip.game === 'demos') location.href = '/demos/';
+  else {
+    const button = document.getElementById('launchBtn'); button.disabled = true;
+    try { await bridge.launch(); }
+    catch (e) { showError({ title: 'CONTROLLER COULD NOT START', message: esc(e.message) }); }
+  }
 };
+// Closing/reloading Minecraft setup releases inputs. Sports navigation keeps
+// its detector alive so /demos/ can use the same serial session.
+addEventListener('pagehide', () => {
+  if (window.GameGrip.game === 'minecraft' && bridge.sid !== null)
+    navigator.sendBeacon('/api/stop', JSON.stringify({ sid: bridge.sid }));
+});
 gsap.from('#titleUI .pill', { scale: 0, rotation: -20, duration: 1, stagger: 0.15, ease: 'elastic.out(1,.5)', delay: 0.3, clearProps: 'transform,rotate,scale' });
 cam.roll = -0.04;
 const tame = new Set(); scene.traverse(o => { const m = o.material; if (m && m.isMeshStandardMaterial && !m.transparent && !tame.has(m)) { tame.add(m); m.envMapIntensity = 0.45; } });

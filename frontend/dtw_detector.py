@@ -88,16 +88,29 @@ RESET = "\033[0m"
 # ---------------------------------------------------------------------------
 # Serial helpers
 # ---------------------------------------------------------------------------
-def read_sample(ser):
-  """Returns one [ax, ay, az, gx, gy, gz] sample, or None for a bad/empty line."""
-  line = ser.readline().decode("utf-8", errors="ignore").strip()
-  parts = line.split(",")
+def parse_sample_line(line):
+  """Accept six motion values, optionally followed by the firmware button bit.
+
+  The browser sports detector uses motion only. Keep its six-value sample
+  shape while accepting the same button-equipped board as the host app.
+  """
+  parts = line.strip().split(",")
+  if len(parts) == 7:
+    if parts[-1].strip() not in ("0", "1"):
+      return None
+    parts = parts[:6]
   if len(parts) != 6:
     return None
   try:
-    return [float(p) for p in parts]
+    sample = [float(p) for p in parts]
   except ValueError:
     return None
+  return sample if all(np.isfinite(value) for value in sample) else None
+
+
+def read_sample(ser):
+  """Returns one [ax, ay, az, gx, gy, gz] sample, or None for a bad/empty line."""
+  return parse_sample_line(ser.readline().decode("utf-8", errors="ignore"))
 
 
 def record(ser, seconds):
