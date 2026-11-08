@@ -59,13 +59,13 @@ const CFG = {
 // send swings with device "esp2" - this table already routes them.
 const GRIP = {
   devices: {
-    esp1: { baseball: 2, boxing: 1 },   // batter / red boxer
-    esp2: { baseball: 1, boxing: 2 },   // pitcher / blue boxer (next week)
+    esp1: { baseball: 2, boxing: 1 },   // left port: batter, red (screen left)
+    esp2: { baseball: 1, boxing: 2 },   // right port: pitcher, blue (screen right)
   },
   intensity: 0.7,   // dtw_detector reports no swing strength, so strap swings use this
-  // dtw_detector fires partway through the real swing, so the bat meets the ball
+  // The strap fires partway through the real swing, so the bat meets the ball
   // this many seconds after detection (keyboard presses use 0.1).
-  swingLead: 0.03,
+  swingLead: 0.08,
 };
 const V3 = THREE.Vector3;
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -732,7 +732,7 @@ function createBaseball() {
     const av = makeAvatar(RED); scene.add(av.root);
     const home = new V3(x, i === 0 ? 0.24 : 0, z);
     av.root.position.copy(home);
-    return { av, home, target: null, speed: 6.6, runPh: 0 };
+    return { av, home, target: null, speed: 5.4, runPh: 0 };
   });
   const pitcher = fielders[0];
   const batter = makeAvatar(BLUE); scene.add(batter.root);
@@ -804,7 +804,13 @@ function createBaseball() {
   }
 
   // ---------- state
-  const CONTACT_Z = -0.3, SWING_TO_CONTACT = 0.1, HIT_WINDOW = 0.11;
+  const CONTACT_Z = -0.3, SWING_TO_CONTACT = 0.1;
+  // Timing error within HIT_WINDOW is real contact: solid in the middle, weaker and
+  // sprayed toward the edges. Out to TIP_WINDOW it is a foul tip. Beyond that, a miss.
+  // The ball can be met at most LATE_REACH s after it crosses the hitting plane.
+  const HIT_WINDOW = 0.19, TIP_WINDOW = 0.28, LATE_REACH = 0.05, MIN_REACH = 0.03;
+  const SWEET = new V3(0, 0.78, 0);
+  let CONTACT_W = 0.15;   // swing-animation time where the sweet spot crosses CONTACT_Z (measured at load)
   // base running: speed = 2.5 m/s + MASH_SPEED per press/second (max 9.8). The runner
   // snaps onto a bag once within BASE_SNAP of it (1.5 m), and leaves only after
   // LEAVE_PRESSES new presses made at least BASE_DWELL s after arriving.
@@ -898,12 +904,37 @@ function createBaseball() {
   }
   // e = timing error in seconds (negative = early). Right-handed batter:
   // early pulls the ball to left field, late pushes it to right field, on time goes up the middle.
+  const _sweet = new V3();
+  function sweetSpot(w, out) {
+    animBatter(w); batter.root.updateMatrixWorld(true);
+    return bat.localToWorld(out.copy(SWEET));
+  }
+  function findContactW() {
+    let best = CONTACT_W, bestD = 1e9;
+    for (let w = 0.04; w <= 0.32; w += 0.0025) {
+      const p = sweetSpot(w, _sweet);
+      const d = Math.abs(p.z - CONTACT_Z) + (p.x < -0.45 ? 5 : 0);
+      if (d < bestD) { bestD = d; best = w; }
+    }
+    return best;
+  }
   function contact(e) {
+    const tip = Math.abs(e) > HIT_WINDOW;
     const u = clamp(e / HIT_WINDOW, -1, 1);
-    const q = 1 - Math.abs(u);
-    const spray = (Math.sign(u) * Math.pow(Math.abs(u), 1.3) * 55 + rand(-4, 4)) * Math.PI / 180;
-    const ev = 20 + 30 * q + 6 * (swing.intensity - 0.5);
-    const la = clamp(25 + rand(-1, 1) * (1 - q) * 40 + rand(-6, 8), -12, 75) * Math.PI / 180;
+    const q = tip ? 0 : 1 - Math.abs(u);
+    let spray, ev, la;
+    if (tip) {
+      spray = Math.sign(e) * rand(26, 62) * Math.PI / 180;
+      ev = rand(13, 21);
+      la = rand(-8, 25) * Math.PI / 180;
+    } else {
+      spray = (Math.sign(u) * Math.pow(Math.abs(u), 1.6) * 36 + rand(-4, 4)) * Math.PI / 180;
+      ev = 20 + 30 * q + 6 * (swing.intensity - 0.5);
+      la = clamp(25 + rand(-1, 1) * (1 - q) * 40 + rand(-6, 8), -12, 75) * Math.PI / 180;
+    }
+    // the ball leaves from the bat's sweet spot, so the bat is seen to hit it
+    swing.t = CONTACT_W; swing.rate = 1;
+    ball.p.copy(sweetSpot(CONTACT_W, _sweet));
     ball.ax = 0;
     ball.v.set(Math.sin(spray) * Math.cos(la), Math.sin(la), -Math.cos(spray) * Math.cos(la)).multiplyScalar(ev);
     swing.contact = true;
@@ -919,10 +950,10 @@ function createBaseball() {
     let best = null, bestNeed = 1e9;
     for (const f of fielders) {
       const d = Math.hypot(f.av.root.position.x - pre.P.x, f.av.root.position.z - pre.P.z);
-      const need = Math.max(0, d - 1.0) / 6.0 + 0.4;
+      const need = Math.max(0, d - 0.5) / 4.6 + 0.75;
       if (need < bestNeed) { bestNeed = need; best = f; }
     }
-    if (!pre.wall && bestNeed <= pre.T && pre.T > 0.35) { play.catcher = best; best.target = pre.P.clone().setY(0); }
+    if (!pre.wall && bestNeed <= pre.T * 0.85 && pre.T > 0.5) { play.catcher = best; best.target = pre.P.clone().setY(0); }
     else { play.chaser = best; }
   }
 
@@ -931,7 +962,7 @@ function createBaseball() {
       if (state === 'ready') { state = 'windup'; pw = 0; pitchInt = intensity; }
     } else {
       if (state === 'inplay') { play.mash.push(T); return; }
-      if (!swing && (state === 'ready' || state === 'windup' || state === 'pitch')) { swing = { t: 0, tp: T, lead, intensity, contact: false, e: undefined }; sfx.whoosh(); }
+      if (!swing && (state === 'ready' || state === 'windup' || state === 'pitch')) { swing = { t: 0, tp: T, lead, intensity, contact: false, e: undefined, rate: 1 }; sfx.whoosh(); }
     }
   }
 
@@ -1008,14 +1039,20 @@ function createBaseball() {
       }
     }
     // swing timer
-    if (swing) { swing.t += dt; if (swing.t > 0.5 && state !== 'inplay' && !(state === 'pitch' && swing.e != null)) swing = null; }
+    if (swing) { swing.t += dt * swing.rate; if (T - swing.tp > 0.5 && state !== 'inplay' && !(state === 'pitch' && swing.e != null)) swing = null; }
 
     // ball
     if (ball.holder) { ball.holder.getWorldPosition(ball.p); }
     if (state === 'pitch') {
       if (swing && swing.e === undefined && pitchArrive != null) {
         const e = swing.tp + swing.lead - pitchArrive;
-        if (Math.abs(e) <= HIT_WINDOW) { swing.e = e; swing.hitAt = Math.max(pitchArrive, swing.tp); } else swing.e = null;
+        const hitAt = Math.max(pitchArrive, swing.tp + MIN_REACH);
+        if (Math.abs(e) <= TIP_WINDOW && hitAt - pitchArrive <= LATE_REACH) {
+          swing.e = e; swing.hitAt = hitAt;
+          // pace the swing so the bat's sweet spot arrives exactly when the ball does
+          const left = hitAt - T;
+          swing.rate = left > 0.01 ? clamp((CONTACT_W - swing.t) / left, 0.3, 6) : 1;
+        } else swing.e = null;
       }
       const n = Math.max(1, Math.ceil(dt * 240)), h = dt / n;
       for (let i = 0; i < n && state === 'pitch'; i++) {
@@ -1045,17 +1082,17 @@ function createBaseball() {
             if (play.phase === 'air' && play.t >= play.T) play.phase = 'ground';
             ch.target = play.phase === 'air' ? play.P.clone() : new V3(ball.p.x + ball.v.x * 0.35, 0, ball.p.z + ball.v.z * 0.35);
             const rp = ch.av.root.position;
-            if (play.t > 0.3 && ball.p.y < 1.7 && Math.hypot(rp.x - ball.p.x, rp.z - ball.p.z) < 1.2) {
+            if (play.t > 0.3 && ball.p.y < 1.7 && Math.hypot(rp.x - ball.p.x, rp.z - ball.p.z) < 0.9) {
               play.phase = 'held'; play.heldT = 0; ball.live = false; ball.holder = ch.av.arms.L.hand; ch.target = null; sfx.mitt();
             }
           }
           if (play.phase === 'held' && ch && !play.done) {
             play.heldT += dt;
-            if (play.heldT > 0.5) {
+            if (play.heldT > 0.9) {
               const r = play.runner, tb = r.atBase ? Math.round(r.s) : Math.floor(r.s + 1e-6) + 1;
               play.throwTo = Math.max(1, tb);
               play.from = ball.p.clone(); play.to = BASES[play.throwTo].clone().setY(1.2);
-              play.dur = play.from.distanceTo(play.to) / 26 + 0.2; play.thT = 0; play.phase = 'throw';
+              play.dur = play.from.distanceTo(play.to) / 20 + 0.25; play.thT = 0; play.phase = 'throw';
               ball.holder = null; r.holdNext = true; sfx.whoosh();
               ch.av.root.rotation.y = Math.atan2(play.to.x - ch.av.root.position.x, play.to.z - ch.av.root.position.z);
             }
@@ -1160,14 +1197,19 @@ function createBaseball() {
 
   function hud() {
     let h = `<div class="t">BASEBALL</div>
-      <div>${key('G')}pitch<span class="gap"></span>${key('V')}swing &middot; mash to run</div>
+      <div>${key('G')}pitch<span class="gap"></span>${key('V')}swing &middot; pump arms to run</div>
       <div>${key('T')}switch to boxing</div>
       <div style="margin-top:4px">strikes ${dots(strikes, 2)}<span class="gap"></span>outs ${dots(outs, 2)}<span class="gap"></span>runs ${runs}</div>`;
     return h;
   }
 
   reset();
-  return { scene, cam, update, press, reset, hud, get over() { return over; }, get dbg() { return { state, strikes, outs, runs, pw, swing, play: play && { t: play.t, phase: play.phase, foul: play.foul, hr: play.hr, s: play.runner.s }, ball: ball.p.toArray().map(v => +v.toFixed(2)) }; }, players: ["PITCHER", "BATTER"], verb: "swing", enter() {} };
+  function run() {
+    if (state === 'inplay' && play) play.mash.push(T);
+  }
+  CONTACT_W = findContactW();
+  animBatter(null);
+  return { scene, cam, update, press, run, reset, hud, get over() { return over; }, get dbg() { return { state, strikes, outs, runs, pw, swing, T, arrive: pitchArrive, contactW: CONTACT_W, play: play && { t: play.t, phase: play.phase, foul: play.foul, hr: play.hr, s: play.runner.s }, ball: ball.p.toArray().map(v => +v.toFixed(2)) }; }, players: ["PITCHER", "BATTER"], verb: "swing", enter() {} };
 }
 
 /* =====================================================================
@@ -1281,19 +1323,19 @@ function createBoxing() {
   function press(p, intensity) {
     if (fresh) { fresh = false; }
     const f = F[p - 1];
-    if (f.state !== 'fight' || f.cd > 0 || f.recoil > 0.15) return;
-    f.punch = { t: 0, hand: f.alt, checked: false, power: intensity }; f.alt *= -1; f.cd = 0.3; sfx.whoosh();
+    if (f.state !== 'fight' || f.cd > 0) return;
+    f.punch = { t: 0, hand: f.alt, checked: false, power: intensity }; f.alt *= -1; f.cd = 0.08; sfx.whoosh();
   }
 
   const _h = new V3();
   function tryHit(f, o) {
     const d = f.p.distanceTo(o.p);
-    if (d > 1.95 || o.state !== 'fight' || o.dodge > 0 || o.recoil > 0.3) return;
+    if (d > 1.95 || o.state !== 'fight' || o.dodge > 0) return;
     if (!o.punch && Math.random() < 0.14) { o.dodge = 0.4; o.dodgeDir = Math.random() < 0.5 ? -1 : 1; return; }
     const counter = o.punch && o.punch.t < 0.09;
     let dmg = rand(11, 15) * (0.85 + 0.3 * f.punch.power) * (counter ? 1.5 : 1);
     o.hp = Math.max(0, o.hp - dmg);
-    o.recoil = 0.5; o.punch = null;
+    o.recoil = 0.5;
     const n = new THREE.Vector2().subVectors(o.p, f.p).normalize();
     o.kv.copy(n).multiplyScalar(counter ? 8.5 : 7);
     o.av.head.getWorldPosition(_h); fx.burst(_h, counter ? 1.4 : 1.0);
@@ -1410,7 +1452,7 @@ function createBoxing() {
   function hud() {
     const bar = (f) => `<span class="bar"><i style="width:${Math.round(f.hp / CFG.BOX_HP * 100)}%"></i></span>`;
     return `<div class="t">BOXING</div>
-      <div>${key('F')}red punch<span class="gap"></span>${key('J')}blue punch</div>
+      <div>${key('F')}red punch<span class="gap"></span>${key('J')}blue punch &middot; a fast swing punches</div>
       <div>${key('T')}switch to baseball</div>
       <div style="margin-top:4px">RED${bar(F[0])}BLUE${bar(F[1])}</div>`;
   }
@@ -1459,12 +1501,28 @@ const GameGrip = {
     GameGrip.swing(map[mode], intensity, GRIP.swingLead);
     strap.last = realNow();
   },
+  // Left port (esp1) is the left player: red punch, batter, arm-pump run.
+  // Right port (esp2) is the right player: blue punch, pitcher.
+  // Boxing listens to light punches; baseball listens to calibrated swings.
+  fromStrap(kind, device) {
+    const who = device || 'esp1';
+    if (strap.locked) return;
+    strap.last = realNow();
+    if (mode === 'boxing') {
+      if (kind === 'punch') GameGrip.deviceSwing(who);
+      return;
+    }
+    if (who === 'esp2' && kind === 'swing') GameGrip.swing(1, 0.7);
+    else if (who === 'esp1' && kind === 'swing') GameGrip.swing(2, GRIP.intensity, GRIP.swingLead);
+    else if (who === 'esp1' && kind === 'run' && games.baseball.run) games.baseball.run();
+  },
   switchGame: switchMode,
 };
 
 /* ---- strap link: on by default when this page is served by gamegrip_server.py and
         calibration has finished; falls back to keyboard-only otherwise ---- */
-const strap = { server: false, live: false, sid: null, devices: new Set(), last: -9 };
+// locked: strap motion is ignored until K, so the modules can be handled after calibration.
+const strap = { server: false, live: false, sid: null, devices: new Set(), last: -9, locked: true };
 (async function connectStraps() {
   if (!location.protocol.startsWith('http')) return;
   try {
@@ -1482,15 +1540,19 @@ const strap = { server: false, live: false, sid: null, devices: new Set(), last:
     if (ev.sid !== strap.sid && ev.type !== 'listening') return;
     if (ev.type === 'listening') { strap.sid = ev.sid; strap.live = true; strap.devices.add(ev.device || 'esp1'); }
     else if (ev.type === 'error') { strap.live = false; strap.devices.clear(); }
-    else if (ev.type === 'swing' && strap.live) GameGrip.deviceSwing(ev.device || 'esp1');
+    else if (strap.live && (ev.type === 'swing' || ev.type === 'punch' || ev.type === 'run'))
+      GameGrip.fromStrap(ev.type, ev.device || 'esp1');
   };
 })();
 function strapHud() {
   if (!strap.server) return '';
   if (!strap.live) return `<div class="dim" style="margin-top:4px">GameGrip strap: waiting for calibration</div>`;
-  const names = [...strap.devices].map(d => games[mode].players[(GRIP.devices[d]?.[mode] || 1) - 1]);
+  if (strap.locked) return `<div style="margin-top:4px">${key('K')}GameGrip straps locked &middot; press K to unlock</div>`;
   const pulse = realNow() - strap.last < 0.25 ? ' style="color:#c8ff3d"' : '';
-  return `<div style="margin-top:4px"><span${pulse}>●</span> GameGrip strap &rarr; ${names.join(' & ').toLowerCase()}</div>`;
+  const how = mode === 'boxing'
+    ? 'left strap is red · right strap is blue'
+    : 'left strap hits · right strap bowls · pump the left arm to run';
+  return `<div style="margin-top:4px"><span${pulse}>●</span> GameGrip ${how}</div>`;
 }
 window.GameGrip = GameGrip;
 window.__games = games; window.__makeAvatar = makeAvatar;
@@ -1498,7 +1560,8 @@ window.__games = games; window.__makeAvatar = makeAvatar;
 addEventListener('keydown', (e) => {
   if (e.repeat) return;
   const k = e.key.toLowerCase();
-  if (k === 't') { ensureAudio(); switchMode(); }
+  if (k === 'k') { ensureAudio(); strap.locked = !strap.locked; }
+  else if (k === 't') { ensureAudio(); switchMode(); }
   else if (k === 'g' || k === 'f') GameGrip.swing(1, 0.6);
   else if (k === 'v' || k === 'j') GameGrip.swing(2, 0.6);
 });

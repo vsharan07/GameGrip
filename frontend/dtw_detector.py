@@ -25,6 +25,8 @@ import numpy as np
 import serial
 
 # --- Configuration ---
+# Button board. On macOS this is usually /dev/cu.usbserial-XXXX (not COM10).
+# A second USB serial port is picked up automatically as the other boxer.
 PORT = "COM10"
 BAUD = 115200
 GYRO_COLUMNS = slice(3, 6)   # gx,gy,gz are columns 3,4,5 of each line

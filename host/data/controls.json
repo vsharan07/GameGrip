@@ -3,24 +3,24 @@
   "aim": {
     "acceleration": 1.4,
     "bias_dps": [
-      -5.84376237623762,
-      2.3694059405940595,
-      -0.5712871287128712
+      -5.9934210526315725,
+      1.9322368421052627,
+      -0.13903508771929832
     ],
-    "deadzone_dps": 5.057632420938959,
+    "deadzone_dps": 4.004240716122472,
     "enabled": true,
-    "horizontal_axis": "gx",
+    "horizontal_axis": "gz",
     "horizontal_sensitivity": 18.0,
     "invert_horizontal": false,
     "invert_vertical": true,
     "max_pixels_per_second": 25000.0,
     "mount_learned": true,
-    "neutral_dps": 5.057632420938959,
+    "neutral_dps": 4.004240716122472,
     "paused": false,
     "rotation_deg": 0,
     "sensitivity": 18.0,
     "smoothing": 0.9,
-    "vertical_axis": "gz",
+    "vertical_axis": "gx",
     "vertical_sensitivity": 14.0
   },
   "button_input": "space",

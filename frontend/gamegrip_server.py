@@ -75,6 +75,12 @@ def parse_line(line):
   s = ANSI.sub("", line).strip()
   if not s:
     return None
+  device = None
+  # search, not match: a debug line from the other board's thread can land in front
+  tagged = re.search(r"\[(esp\d+)\]\s*(.*)", s)
+  if tagged:
+    device = tagged.group(1)
+    s = tagged.group(2).strip()
   if s.startswith("--- Step 1:"):
     return {"type": "step", "kind": "still", "step": 0}
   m = re.match(r"--- Step 2: Calibration swing #(\d+) of (\d+)", s)
@@ -107,13 +113,30 @@ def parse_line(line):
   if s == "CALIBRATED!":
     return {"type": "calibrated"}
   if s.startswith("Listening for swings"):
-    return {"type": "listening"}
-  m = re.search(r"SWING DETECTED!\s+#(\d+)", s)
+    return _tagged({"type": "listening"}, device)
+  if s == "CLICK":
+    return _tagged({"type": "click"}, device)
+  if s == "HOLD":
+    return _tagged({"type": "hold"}, device)
+  if s == "RUN":
+    return _tagged({"type": "run"}, device)
+  if s == "PUNCH":
+    return _tagged({"type": "punch"}, device)
+  m = re.search(r"SWING DETECTED!\s+#(\d+)(?:\s+([\d.]+))?", s)
   if m:
     n = int(m.group(1))
     # Same colour index dtw_detector uses for the terminal banner.
-    return {"type": "swing", "n": n, "colour": n % len(dtw.COLOURS)}
+    event = {"type": "swing", "n": n, "colour": n % len(dtw.COLOURS)}
+    if m.group(2):
+      event["speed"] = float(m.group(2))
+    return _tagged(event, device)
   return None
+
+
+def _tagged(event, device):
+  if device:
+    event["device"] = device
+  return event
 
 
 class TeeStdout:
@@ -166,6 +189,8 @@ class Session:
     self.ready = threading.Event()
     self.stopped = False
     self.device = DEVICE_ID
+    self.devices = [DEVICE_ID]
+    self.extra_sers = []
     self.listening = False   # True once dtw_detector.detect() is running
     self.controller = None
     self.connected = False
@@ -179,7 +204,7 @@ class Session:
       self.listening = True
     elif event["type"] == "error":
       self.listening = False
-    broadcast({**event, "sid": self.id, "device": self.device})
+    broadcast({**event, "sid": self.id, "device": event.get("device", self.device)})
 
   def error(self, title, message):
     print(f"{dtw.YELLOW}[Error] {message}{dtw.RESET}", flush=True)
@@ -249,9 +274,8 @@ class Session:
         return
       if self.game == "minecraft":
         self._minecraft()
-      else:
-        tracker = dtw.calibrate(self.ser)
-        dtw.detect(self.ser, tracker)
+      elif self._open_players() and self._calibrate_demos():
+        self._watch_demos()
     except (RuntimeError, LookCalibrationError) as e:
       if not self.stopped:
         # dtw_detector's own errors (no samples, sensor too noisy, ...)
@@ -270,6 +294,173 @@ class Session:
           self.ser.close()
         except Exception:
           pass
+      for ser in self.extra_sers:
+        try:
+          ser.close()
+        except Exception:
+          pass
+
+  def _open_players(self):
+    """Open both boards and match the left port to the left player."""
+    import demo_motion
+
+    ports = [self.ser]
+    for path in demo_motion.extra_usb_ports(self.ser.port)[:1]:
+      other = self._open_extra(path)
+      if other is None:
+        continue
+      other.timeout = 0.05
+      self.extra_sers.append(other)
+      ports.append(other)
+    mapping = demo_motion.players_by_side([ser.port for ser in ports])
+    self.roles = demo_motion.BoardRoles()
+    for ser in ports:
+      self.roles.assign(ser.port, mapping.get(ser.port, "esp1"))
+    by_device = {device: port for port, device in mapping.items()}
+    print(f"Left player (red / batter): {by_device.get('esp1', self.ser.port)}", flush=True)
+    if "esp2" in by_device:
+      print(f"Right player (blue / pitcher): {by_device['esp2']}", flush=True)
+    self.devices = ["esp1"] + (["esp2"] if "esp2" in by_device else [])
+    return True
+
+  def _calibrate_demos(self):
+    """One countdown. Both boards are recorded in every window."""
+    import demo_motion
+
+    serials = [self.ser] + list(self.extra_sers)
+    saved_window = dtw.SWING_WINDOW_SECONDS
+    dtw.SWING_WINDOW_SECONDS = demo_motion.DEMO_SWING_SECONDS
+    try:
+      return self._calibrate_demo_windows(serials)
+    finally:
+      dtw.SWING_WINDOW_SECONDS = saved_window
+
+  def _calibrate_demo_windows(self, serials):
+    import demo_motion
+    rest = {}
+    for attempt in range(dtw.REST_ATTEMPTS):
+      print("\n--- Step 1: Put the sensor down and DON'T touch it ---", flush=True)
+      dtw.countdown()
+      if self.stopped:
+        return False
+      print(">>> Hold still... <<<", flush=True)
+      _mags, gyros = demo_motion.record_windows(serials, dtw.REST_SECONDS)
+      rest = gyros
+      noises = []
+      for port, samples in gyros.items():
+        noise = demo_motion.still_spread(samples)
+        if noise is None:
+          raise RuntimeError(
+              f"{port} sent too few samples. Close the Serial Monitor and check that sketch is streaming.")
+        noises.append(noise)
+      print(f"Baseline captured ({sum(len(v) for v in gyros.values())} samples).", flush=True)
+      if max(noises) <= demo_motion.DEMO_STILL_DPS:
+        print("Still check OK.", flush=True)
+        break
+      print("Sensor moved during the still step (jitter should be under "
+            f"{demo_motion.DEMO_STILL_DPS:g}).", flush=True)
+      if attempt < dtw.REST_ATTEMPTS - 1:
+        print("Let's try that again - set both straps down this time.", flush=True)
+      else:
+        print("Continuing anyway; detection may be less reliable.", flush=True)
+    bias = {port: demo_motion.mean_gyro(samples) for port, samples in rest.items()}
+    swings = {ser.port: [] for ser in serials}
+    for i in range(1, 4):
+      for attempt in range(2):
+        print(f"\n--- Step 2: Calibration swing #{i} of 3 ---", flush=True)
+        print("Move both straps together.", flush=True)
+        dtw.countdown()
+        if self.stopped:
+          return False
+        print(f">>> SWING #{i} NOW! <<<", flush=True)
+        _mags, gyros = demo_motion.record_windows(serials, dtw.SWING_WINDOW_SECONDS)
+        peaks = {port: demo_motion.peak_above(samples, bias.get(port))
+                 for port, samples in gyros.items()}
+        both_moved = all(peak >= demo_motion.CAL_SWING_DPS for peak in peaks.values())
+        if both_moved or attempt == 1 or len(serials) == 1:
+          for port, samples in gyros.items():
+            swings[port].append(samples)
+          print("Recorded.", flush=True)
+          if len(serials) > 1 and not both_moved:
+            print("[Warning] One strap barely moved. Swing both together.", flush=True)
+          break
+        print("One strap stayed still. Swing both together.", flush=True)
+      if i < 3:
+        time.sleep(1.0)
+    hz = demo_motion.sample_rate(rest, dtw.REST_SECONDS)
+    self.swingers = {}
+    self.biases = {}
+    for ser in serials:
+      swinger, board_bias = demo_motion.build_swing(rest.get(ser.port, []), swings[ser.port], hz)
+      self.swingers[ser.port] = swinger
+      self.biases[ser.port] = tuple(float(v) for v in board_bias)
+      t = swinger.tracker
+      print(f"{ser.port}: swing fires at {t.swing_angle:.0f} rotation, "
+            f"or {swinger.peak_fire:.0f} dps; ignoring under {t.speed_gate:.0f} dps", flush=True)
+    print("CALIBRATED!", flush=True)
+    return True
+
+  def _watch_demos(self):
+    """Live punches and baseball. The button board was chosen during calibration."""
+    import demo_motion
+
+    ports = [self.ser] + list(self.extra_sers)
+    for ser in ports:
+      ser.timeout = 0.02
+    if not hasattr(self, "roles"):
+      self.roles = demo_motion.BoardRoles()
+      for port, device in demo_motion.players_by_side([ser.port for ser in ports]).items():
+        self.roles.assign(port, device)
+    print("\nListening for swings... (Ctrl+C to exit)\n", flush=True)
+    stop = threading.Event()
+    workers = []
+    for ser in ports:
+      worker = threading.Thread(
+          target=self._pump_strap, args=(ser, self.roles, stop), daemon=True)
+      worker.gg_session = self
+      worker.start()
+      workers.append(worker)
+    while not self.stopped:
+      time.sleep(0.2)
+    stop.set()
+    for ser in self.extra_sers:
+      try:
+        ser.close()
+      except Exception:
+        pass
+    for worker in workers:
+      worker.join(timeout=1)
+
+  def _pump_strap(self, ser, roles, stop):
+    import demo_motion
+    swingers = getattr(self, "swingers", {})
+    biases = getattr(self, "biases", {})
+    demo_motion.pump(ser, ser.port, roles, stop,
+                     swing=swingers.get(ser.port), bias=biases.get(ser.port))
+
+  def _open_extra(self, path):
+    try:
+      ser = serial.Serial()
+      ser.port, ser.baudrate, ser.timeout = path, dtw.BAUD, 0.05
+      ser.dtr = False
+      ser.rts = False
+      ser.open()
+      time.sleep(0.2)
+      ser.reset_input_buffer()
+    except Exception as e:
+      print(f"Second ESP32 on {path} was not opened: {e}", flush=True)
+      return None
+    deadline = time.time() + 1.5
+    while time.time() < deadline and not self.stopped:
+      raw = ser.readline().decode("utf-8", errors="ignore")
+      if dtw.parse_sample_line(raw) is not None:
+        return ser
+    try:
+      ser.close()
+    except Exception:
+      pass
+    print(f"Second port {path} is not streaming motion, so it stays unused.", flush=True)
+    return None
 
   def _minecraft(self):
     self.controller = MinecraftController(self.send)
@@ -335,7 +526,7 @@ def status():
     if s is None or s.stopped:
       return {"listening": False, "devices": []}
     return {"listening": s.listening, "sid": s.id, "game": s.game,
-            "devices": [s.device] if s.listening else [], "port": dtw.PORT,
+            "devices": list(s.devices) if s.listening else [], "port": dtw.PORT,
             "connected": s.connected,
             "calibrated": bool(s.controller and s.controller.calibrated),
             "controller_live": bool(s.controller and s.controller.live),
@@ -494,7 +685,11 @@ def main():
   parser.add_argument("--port", default=dtw.PORT, help="ESP32 serial port, e.g. COM3.")
   parser.add_argument("--no-browser", action="store_true", help="Do not open a browser automatically.")
   args = parser.parse_args()
-  dtw.PORT = args.port
+  import demo_motion
+  dtw.PORT = demo_motion.choose_port(args.port)
+  if dtw.PORT != args.port:
+    print(f"{args.port} is not a serial port on this computer. Using {dtw.PORT}.",
+          flush=True)
   sys.stdout = TeeStdout(sys.stdout)
   server = Server((HOST, HTTP_PORT), Handler)
   server.daemon_threads = True

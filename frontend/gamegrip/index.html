@@ -1366,6 +1366,14 @@ function calibrateFromPython() {
     const statusShout = (text, opts) => { lastShout = shout(text, opts); };
     const off = bridge.on(ev => {
       switch (ev.type) {
+        case 'button-ask':
+          cutShouts();
+          shout('PRESS THE BUTTON', { sub: 'ON THE STRAP THAT HAS ONE', hold: 1.2, size: 0.72 });
+          break;
+        case 'button-found':
+          cutShouts(); sfx('ding');
+          shout('BUTTON FOUND', { sub: 'THAT STRAP BATS · THE OTHER BOWLS', hold: 0.7, size: 0.7, burst: true });
+          break;
         case 'step':                       // "--- Step 1 ..." / "--- Step 2: Calibration swing #n of 3 ---"
           if (ev.total_steps) lastStep = ev.total_steps;
           step = ev.step; kind = ev.kind; setStep(kind === 'still' ? 0 : STEP_UI[step].chip, 'active');
@@ -1376,7 +1384,10 @@ function calibrateFromPython() {
           if (failed) break;
           const n = ev.n, moving = kind === 'swing' && step === 1;   // swing 1's countdown runs during the fly-over to the stage
           cutShouts(); sfx('blip', 660 + (3 - n) * 110);
-          const sub = kind === 'still' ? (retry && n === 3 ? 'MOVED! TRY AGAIN IN' : 'HOLD STILL IN') : n === 3 ? STEP_UI[step].call : STEP_UI[step].count;
+          const together = window.GameGrip.game === 'demos' && kind === 'swing';
+          const sub = kind === 'still' ? (retry && n === 3 ? 'MOVED! TRY AGAIN IN' : 'HOLD STILL IN')
+            : together ? (n === 3 ? 'BOTH STRAPS!' : 'SWING BOTH IN')
+            : n === 3 ? STEP_UI[step].call : STEP_UI[step].count;
           if (n === 1) retry = false;
           shout(String(n), { sub, hold: 0.38, size: moving ? 0.95 : 1.5, rays: !moving, top: moving, tilt: n % 2 ? -7 : 5 });
           break;
@@ -1386,7 +1397,10 @@ function calibrateFromPython() {
           detail = { step, kind, durationMs: ms, game: window.GameGrip.game };
           emit('record-start', detail); sfx('rec');
           recBox.classList.remove('hidden2'); gsap.fromTo(recBar, { width: '0%' }, { width: '100%', duration: ms / 1000, ease: 'none' });
-          shout(still ? 'HOLD IT...' : STEP_UI[step].go, { sub: !still && window.GameGrip.game === 'minecraft' ? 'TURN ONCE, THEN HOLD' : '', hold: 1.0, size: 1.1, tilt: -9 });
+          const sub = still ? (window.GameGrip.game === 'demos' ? 'BOTH STRAPS DOWN' : '')
+            : window.GameGrip.game === 'demos' ? 'BOTH STRAPS TOGETHER'
+            : window.GameGrip.game === 'minecraft' ? 'TURN ONCE, THEN HOLD' : '';
+          shout(still ? 'HOLD IT...' : (window.GameGrip.game === 'demos' ? 'SWING!' : STEP_UI[step].go), { sub, hold: 1.0, size: 1.1, tilt: -9 });
           if (still) {
             cam.idle = 0;
           } else {
@@ -1560,9 +1574,10 @@ async function run(game) {
     await guard(moveCam([-5, 1.7, 72], [0, 5, 56], 3.0, 'power3.inOut'));          // pull back into the city
     await guard(connected);
     setStep(0, 'active');
-    await guard(shout('HOLD STILL!', { sub: 'FREEZE THAT TOY', burst: true, hold: 0.9, size: 0.8 }));
-    bridge.ready();                                                                // dtw_detector.calibrate() starts
-    await guard(calibrateFromPython());                                            // ...through "CALIBRATED!"
+    const calibrating = calibrateFromPython();
+    shout('HOLD STILL!', { sub: game === 'demos' ? 'BOTH STRAPS DOWN' : 'FREEZE THAT TOY', burst: true, hold: 0.9, size: 0.8 });
+    bridge.ready();
+    await guard(calibrating);
     await guard(floorRun());
     await guard(shout('CALIBRATED!', { hold: 0.9, burst: true, size: 0.95 }));
     await readyScene();                                                            // dtw_detector.detect() is live: swings hit the star
