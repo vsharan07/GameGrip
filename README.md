@@ -214,15 +214,16 @@ Wait for `mode=LIVE` and click the window you want to control.
 
 - Turning the toy moves the mouse.
 - Holding the button for at least 0.3 seconds holds W continuously until you let go.
-- One button click pauses the mouse. A large, quick swing then left-clicks, and the mouse can move again.
-- Two quick clicks pause the mouse. A large, quick swing then right-clicks.
+- One button click pauses the mouse. Any quick swing then left-clicks, and the mouse can move again.
+- Two quick clicks pause the mouse. Any quick swing then right-clicks.
 
-An armed click requires about **60 degrees of net rotation**, a peak speed of
-at least **200 degrees/second**, and at least **0.12 seconds** of movement,
-completed within **0.8 seconds**. Start from still. A small flick, a single
-sensor spike, a slow turn, or repeated small back-and-forth shakes will not
-consume the click opportunity. These initial thresholds live in
-`host/recognition/swing.py`; they still need hands-on tuning once the button works.
+An armed click fires on the first reading faster than **100 degrees/second**,
+as long as the sword was still (under 35 degrees/second) just before. No
+minimum arc or duration is required, so a small flick is enough. This keeps
+swings gentle, which matters because hard swings can knock the button wire
+loose. A slow turn under 100 degrees/second does not use up the click. To
+require a bigger swing, raise `MIN_ROTATION_DEG`, `MIN_PEAK_DPS` and
+`MIN_DURATION_S` in `host/recognition/swing.py`.
 The detector uses the calibrated gyro bias and actual sample times. It shares
 the existing sensor loop with mouse-look and never sleeps to wait for a swing.
 

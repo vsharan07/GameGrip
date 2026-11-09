@@ -107,23 +107,29 @@ def test_two_clicks_then_a_large_swing_is_a_right_click():
 
 
 @pytest.mark.parametrize("movement", [
-    [_fast()],  # the old one-sample trigger
+    [_fast()],  # one fast reading is enough
     [(0, 0, 1, 1500, 0, 0)],  # a very fast spike
-    [(0, 0, 1, 800, 0, 0)] * 4,  # enough angle, but too brief
-    [(0, 0, 1, 300, 0, 0)] * 7,  # fast but only 42 degrees
-    [(0, 0, 1, 100, 0, 0)] * 100,  # broad, slow turn
-    [(0, 0, 1, 190, 0, 0)] * 35,  # large enough arc, below the speed requirement
-    [(0, 0, 1, 800 * (-1) ** i, 0, 0) for i in range(50)],  # small rapid shakes
-    ([_fast()] * 7 + _still(3)) * 4,  # separate small flicks must not add up
-], ids=["flick", "spike", "too-brief", "too-small", "slow-turn", "below-speed", "shake", "separate-flicks"])
-def test_small_or_slow_movements_do_not_spend_the_click_opportunity(movement):
+    [(0, 0, 1, 0, 120, 0)],  # any axis counts
+], ids=["flick", "spike", "other-axis"])
+def test_one_fast_reading_after_still_fires_the_armed_click(movement):
+    session, pressed, _keys = _session("left_click", live_mouse=True)
+    samples = _still(5) + movement + _still(5)
+    events = _play(session, samples, buttons=[1, 0] + [0] * (len(samples) - 2))
+    assert [e["input"] for e in events if e["type"] == "injected"] == ["left_click"]
+    assert pressed == ["left"] and not session._look_paused
+
+
+@pytest.mark.parametrize("movement", [
+    [(0, 0, 1, 90, 0, 0)] * 100,  # a slow turn stays under 100 deg/s
+    [(0, 0, 1, 50, 40, 0)] * 50,  # combined speed is about 64 deg/s
+], ids=["slow-turn", "slow-diagonal"])
+def test_slow_movements_do_not_spend_the_click_opportunity(movement):
     session, pressed, _keys = _session("left_click", live_mouse=True)
     samples = _still(5) + movement + _still(5)
     events = _play(session, samples, buttons=[1, 0] + [0] * (len(samples) - 2))
     assert not any(e["type"] == "injected" for e in events)
     assert pressed == [] and session._armed == "left" and session._look_paused
-    # A deliberate follow-up still works, once, without another button press.
-    events = _play(session, [_fast()] * 18, start=len(samples) * .02, buttons=[0] * 18)
+    events = _play(session, [_fast()] * 3, start=len(samples) * .02, buttons=[0] * 3)
     assert [e["input"] for e in events if e["type"] == "injected"] == ["left_click"]
     assert pressed == ["left"] and not session._look_paused
 
@@ -145,15 +151,15 @@ def test_large_swing_uses_elapsed_time_and_calibrated_bias(hz, axis, sign):
     assert pressed == ["left"]
 
 
-def test_sample_gap_cannot_be_counted_as_swing_motion():
+def test_a_swing_after_a_sample_gap_must_start_from_still_again():
     session, pressed, _keys = _session("left_click", live_mouse=True)
     _play(session, _still(5), buttons=[1, 0, 0, 0, 0])
-    # Two isolated readings across a gap would imply a large fictitious arc.
-    session.push(_fast(), .1, button=0)
+    # After a dropout, motion already in progress is not treated as a fresh swing.
     session.push(_fast(), .7, button=0)
-    _play(session, [_fast()] * 18, start=.72, buttons=[0] * 18)
-    assert pressed == []
-    assert session._armed == "left"
+    _play(session, [_fast()] * 5, start=.72, buttons=[0] * 5)
+    assert pressed == [] and session._armed == "left"
+    _play(session, _still(2) + [_fast()], start=.9, buttons=[0] * 3)
+    assert pressed == ["left"]
 
 
 def test_dry_run_large_swing_logs_once_without_clicking():
@@ -164,13 +170,12 @@ def test_dry_run_large_swing_logs_once_without_clicking():
     assert not pressed and session._armed is None
 
 
-def test_disconnecting_during_a_partial_swing_discards_its_progress():
+def test_disconnecting_while_armed_cancels_the_click():
     session, pressed, _keys = _session("left_click", live_mouse=True)
-    samples = _still(5) + [_fast()] * 8
-    _play(session, samples, buttons=[1, 0] + [0] * (len(samples) - 2))
+    _play(session, _still(5), buttons=[1, 0, 0, 0, 0])
     assert session._armed == "left" and not pressed
     session.release_inputs()
-    _play(session, _still(5) + [_fast()] * 18, start=.3, buttons=[0] * 23)
+    _play(session, _still(5) + [_fast()] * 3, start=.3, buttons=[0] * 8)
     assert not pressed and session._armed is None
 
 

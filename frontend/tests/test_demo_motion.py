@@ -228,3 +228,20 @@ def test_server_hears_each_board():
     hold = bridge.parse_line("[esp1] HOLD")
     assert hold["type"] == "hold" and hold["device"] == "esp1"
     assert bridge.parse_line("SWING DETECTED! #1")["type"] == "swing"
+
+
+def test_extra_usb_ports_skips_windows_bluetooth_links(monkeypatch):
+  from types import SimpleNamespace
+  from serial.tools import list_ports
+  import demo_motion
+
+  ports = [
+    SimpleNamespace(device="COM3", description="Silicon Labs CP210x USB to UART Bridge (COM3)",
+                    hwid="USB VID:PID=10C4:EA60 SER=0001 LOCATION=1-1"),
+    SimpleNamespace(device="COM4", description="Standard Serial over Bluetooth link (COM4)",
+                    hwid="BTHENUM\{00001101-0000-1000-8000-00805F9B34FB}_VID&0001004C"),
+    SimpleNamespace(device="COM6", description="Silicon Labs CP210x USB to UART Bridge (COM6)",
+                    hwid="USB VID:PID=10C4:EA60 SER= LOCATION=1-2"),
+  ]
+  monkeypatch.setattr(list_ports, "comports", lambda: ports)
+  assert demo_motion.extra_usb_ports("COM3") == ["COM6"]

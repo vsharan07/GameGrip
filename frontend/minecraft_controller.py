@@ -25,17 +25,33 @@ LAUNCH_SECONDS = 5
 STALE_SECONDS = 1.0
 
 
+# How much of a turn must land on one sensor axis. 0.7 accepts a sensor
+# mounted up to about 45 degrees off; below that the turn is truly diagonal.
+MIN_AXIS_SHARE = 0.7
+MIN_STROKE_DEG = 5.0
+# Why the most recent stroke was rejected, for a useful error message.
+last_stroke_problem = None
+
+
 def stroke_axis(samples, bias, floor_dps):
     """Use the outward stroke, so returning to centre cannot cancel its sign."""
+    global last_stroke_problem
+    last_stroke_problem = None
     if len(samples) < 4:
+        last_stroke_problem = "only %d samples were recorded" % len(samples)
         return None
     gyro = np.asarray(samples, dtype=float)[:, 3:6]
     angle, direction = dtw.main_stroke(gyro, np.asarray(bias), floor_dps, 50.0)
-    if direction is None or angle < 5.0:
+    if direction is None or angle < MIN_STROKE_DEG:
+        last_stroke_problem = "it measured only %.0f degrees" % angle
         return None
     axis = int(np.argmax(np.abs(direction)))
     # An ambiguous diagonal should be retried rather than silently mis-mapped.
-    if abs(direction[axis]) < 0.8:
+    if abs(direction[axis]) < MIN_AXIS_SHARE:
+        last_stroke_problem = (
+            "it was diagonal: %.0f degrees split across gx/gy/gz as %s. "
+            "Straighten the sensor on the toy, or turn without twisting"
+            % (angle, "/".join("%d%%" % round(abs(v) * 100) for v in direction)))
         return None
     return axis, float(direction[axis])
 
@@ -63,7 +79,12 @@ class MinecraftController:
         # dtw.record returns NumPy arrays; the host's recording functions use
         # ordinary sequences (including truth checks in gyro_bias/gyro_noise).
         rest, right, down = ([tuple(row) for row in rows] for rows in (rest, right, down))
-        document = build_document(rest, right, down, vertical_direction="down", axis_picker=stroke_axis)
+        try:
+            document = build_document(rest, right, down, vertical_direction="down", axis_picker=stroke_axis)
+        except LookCalibrationError as error:
+            if last_stroke_problem:
+                raise LookCalibrationError("%s (%s.)" % (error, last_stroke_problem)) from error
+            raise
         with self.lock:
             if self.closed:
                 return

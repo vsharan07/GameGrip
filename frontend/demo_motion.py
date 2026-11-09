@@ -365,23 +365,43 @@ def wait_for_button(serials, is_stopped, timeout=30):
   return None
 
 
-def record_windows(serials, seconds):
-  """Gyro magnitudes and vectors from every board during one shared window."""
+def record_windows(serials, seconds, spare=(), lost=None):
+  """Gyro magnitudes and vectors from every board during one shared window.
+
+  spare: ports that may fail without ending the recording. A spare board that
+  errors is added to lost (a set) and simply records nothing more.
+  """
   mags = {ser.port: [] for ser in serials}
   gyros = {ser.port: [] for ser in serials}
   readers = []
   for ser in serials:
     # Non-blocking so one board cannot make the other wait out a timeout.
-    ser.timeout = 0
-    reset = getattr(ser, "reset_input_buffer", None)
-    if reset:
-      reset()
+    try:
+      ser.timeout = 0
+      reset = getattr(ser, "reset_input_buffer", None)
+      if reset:
+        reset()
+    except Exception:
+      if ser.port not in spare:
+        raise
+      if lost is not None:
+        lost.add(ser.port)
+      continue
     readers.append(LineReader(ser))
   end = time.monotonic() + seconds
   while time.monotonic() < end:
     saw = False
-    for reader in readers:
-      for text in reader.lines():
+    for reader in list(readers):
+      try:
+        texts = reader.lines()
+      except Exception:
+        if reader.ser.port not in spare:
+          raise
+        if lost is not None:
+          lost.add(reader.ser.port)
+        readers.remove(reader)
+        continue
+      for text in texts:
         parsed = parse_motion(text)
         if parsed is None:
           continue
@@ -480,7 +500,12 @@ def extra_usb_ports(taken):
     if dev == taken:
       continue
     low = dev.lower()
-    if "bluetooth" in low or "debug-console" in low:
+    # Windows names Bluetooth serial links plain COMn, so also check the
+    # description and hardware id (BTHENUM) rather than only the device name.
+    about = ("%s %s" % (getattr(port, "description", "") or "",
+                        getattr(port, "hwid", "") or "")).lower()
+    if ("bluetooth" in low or "debug-console" in low
+        or "bluetooth" in about or "bthenum" in about):
       continue
     if (low.startswith("/dev/cu.usb") or low.startswith("/dev/ttyusb")
         or low.startswith("/dev/ttyacm") or "usbserial" in low

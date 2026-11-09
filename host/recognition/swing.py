@@ -1,17 +1,20 @@
-"""Require a deliberate arc for an armed mouse click, not a single gyro spike.
+"""Decide when an armed mouse click fires.
 
-Gyro is bias-corrected deg/s. Net rotation prevents a small back-and-forth
-shake from adding up to a large swing. All timing comes from sample arrivals;
+These are the original, easy-to-trigger values: after a quiet sample, the first
+sample faster than 100 deg/s fires. No minimum arc or duration is required,
+because a harder swing tends to knock the button wire loose. Raise
+MIN_ROTATION_DEG, MIN_PEAK_DPS and MIN_DURATION_S to require a bigger swing.
+Gyro is bias-corrected deg/s. All timing comes from sample arrivals;
 no sleeps or assumed sample rate are used.
 """
 
 import math
 
-MIN_ROTATION_DEG = 60.0
-MIN_PEAK_DPS = 200.0
-MIN_DURATION_S = 0.12
+MIN_ROTATION_DEG = 0.0
+MIN_PEAK_DPS = 100.0
+MIN_DURATION_S = 0.0
 MAX_DURATION_S = 0.8
-START_DPS = 80.0
+START_DPS = 100.0
 QUIET_DPS = 35.0
 MAX_SAMPLE_GAP_S = 0.1
 
@@ -31,7 +34,7 @@ class SwingGate:
         self._peak_dps = 0.0
 
     def update(self, gyro, now_s):
-        """Return True once a large, quick stroke qualifies after a quiet sample."""
+        """Return True once a fast enough stroke starts after a quiet sample."""
         dt = 0.0 if self._last_s is None else now_s - self._last_s
         if self._last_s is not None and (dt <= 0.0 or dt > MAX_SAMPLE_GAP_S):
             self.reset()

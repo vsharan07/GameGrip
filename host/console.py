@@ -204,7 +204,7 @@ def _print_event(event):
         print("released %s" % event["input"], flush=True)
     elif kind == "paused":
         print(
-            "look paused. A large, quick swing is a %s click."
+            "look paused. A quick swing is a %s click."
             % ("right" if event.get("input") == "right" else "left"),
             flush=True,
         )

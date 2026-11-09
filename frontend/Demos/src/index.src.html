@@ -1538,7 +1538,13 @@ const strap = { server: false, live: false, sid: null, devices: new Set(), last:
       strap.sid = ev.sid; strap.live = false; strap.devices.clear();
     }
     if (ev.sid !== strap.sid && ev.type !== 'listening') return;
-    if (ev.type === 'listening') { strap.sid = ev.sid; strap.live = true; strap.devices.add(ev.device || 'esp1'); }
+    if (ev.type === 'listening') {
+      strap.sid = ev.sid; strap.live = true; strap.devices.add(ev.device || 'esp1');
+      // The event names one board; /api/status lists every strap that is live.
+      fetch('/api/status', { cache: 'no-store' }).then(r => r.json())
+        .then(st => { if (st.sid === strap.sid) (st.devices || []).forEach(d => strap.devices.add(d)); })
+        .catch(() => {});
+    }
     else if (ev.type === 'error') { strap.live = false; strap.devices.clear(); }
     else if (strap.live && (ev.type === 'swing' || ev.type === 'punch' || ev.type === 'run'))
       GameGrip.fromStrap(ev.type, ev.device || 'esp1');
@@ -1549,6 +1555,13 @@ function strapHud() {
   if (!strap.live) return `<div class="dim" style="margin-top:4px">GameGrip strap: waiting for calibration</div>`;
   if (strap.locked) return `<div style="margin-top:4px">${key('K')}GameGrip straps locked &middot; press K to unlock</div>`;
   const pulse = realNow() - strap.last < 0.25 ? ' style="color:#c8ff3d"' : '';
+  // One strap: it plays the left player (batter / red) and the other player uses the keyboard.
+  if (!strap.devices.has('esp2')) {
+    const how = mode === 'boxing'
+      ? `strap is red &middot; blue punches with ${key('J')}`
+      : `strap bats &middot; pump it to run &middot; pitcher throws with ${key('G')}`;
+    return `<div style="margin-top:4px"><span${pulse}>●</span> GameGrip ${how}</div>`;
+  }
   const how = mode === 'boxing'
     ? 'left strap is red · right strap is blue'
     : 'left strap hits · right strap bowls · pump the left arm to run';

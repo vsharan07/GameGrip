@@ -135,3 +135,26 @@ def test_conflicting_directions_fail_without_overwriting_saved_controls(controll
     with pytest.raises(LookCalibrationError, match="same axis"):
         controller.calibrate(still(), turn(1, 1), turn(1, -1))
     assert controller.app.controls_path.read_bytes() == saved
+
+
+def test_stroke_axis_accepts_a_tilted_mount_and_explains_diagonals():
+    import minecraft_controller as mc
+    still = [(0, 0, 1, 0, 0, 0)] * 5
+    # About 40 degrees off the gy axis (77% / 64%), which the old 80% rule rejected.
+    tilted = still + [(0, 0, 1, 0, 160, 135)] * 25 + still
+    assert mc.stroke_axis(tilted, (0, 0, 0), 8.0)[0] == 1
+    # Spread over all three axes (60% at most) is still rejected, with numbers.
+    diagonal = still + [(0, 0, 1, 90, 80, 90)] * 25 + still
+    assert mc.stroke_axis(diagonal, (0, 0, 0), 8.0) is None
+    assert "diagonal" in mc.last_stroke_problem and "%" in mc.last_stroke_problem
+    tiny = still + [(0, 0, 1, 0, 20, 0)] * 3 + still
+    assert mc.stroke_axis(tiny, (0, 0, 0), 8.0) is None
+    assert "degrees" in mc.last_stroke_problem
+
+
+def test_too_small_error_says_why(controller):
+    still = [(0, 0, 1, 0, 0, 0)] * 30
+    turn = still[:5] + [(0, 0, 1, 90, 80, 90)] * 25 + still[:5]
+    down = still[:5] + [(0, 0, 1, 0, 0, -150)] * 25 + still[:5]
+    with pytest.raises(LookCalibrationError, match="right turn.*diagonal"):
+        controller.calibrate(still, turn, down)

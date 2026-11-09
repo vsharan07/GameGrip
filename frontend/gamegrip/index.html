@@ -1318,7 +1318,12 @@ function showError({ title, message }) {
   emit('error', { title, message });
 }
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// How many straps the server found for DEMOS (2 unless it says otherwise).
+// With one strap, the other player is on the keyboard.
+let strapCount = 2;
+const strapWords = (one, both) => strapCount === 1 ? one : both;
 bridge.on(ev => {
+  if (ev.type === 'straps') strapCount = ev.count;
   if (ev.type === 'error') showError({ title: ev.title, message: esc(ev.message) });
   if (ev.type === 'swing') { emit('swing', { n: ev.n }); swingStarBurst(ev.colour); }
   if (ev.type === 'controller-starting') {
@@ -1386,7 +1391,7 @@ function calibrateFromPython() {
           cutShouts(); sfx('blip', 660 + (3 - n) * 110);
           const together = window.GameGrip.game === 'demos' && kind === 'swing';
           const sub = kind === 'still' ? (retry && n === 3 ? 'MOVED! TRY AGAIN IN' : 'HOLD STILL IN')
-            : together ? (n === 3 ? 'BOTH STRAPS!' : 'SWING BOTH IN')
+            : together ? (n === 3 ? strapWords('SWING THE STRAP!', 'BOTH STRAPS!') : strapWords('SWING IN', 'SWING BOTH IN'))
             : n === 3 ? STEP_UI[step].call : STEP_UI[step].count;
           if (n === 1) retry = false;
           shout(String(n), { sub, hold: 0.38, size: moving ? 0.95 : 1.5, rays: !moving, top: moving, tilt: n % 2 ? -7 : 5 });
@@ -1397,8 +1402,8 @@ function calibrateFromPython() {
           detail = { step, kind, durationMs: ms, game: window.GameGrip.game };
           emit('record-start', detail); sfx('rec');
           recBox.classList.remove('hidden2'); gsap.fromTo(recBar, { width: '0%' }, { width: '100%', duration: ms / 1000, ease: 'none' });
-          const sub = still ? (window.GameGrip.game === 'demos' ? 'BOTH STRAPS DOWN' : '')
-            : window.GameGrip.game === 'demos' ? 'BOTH STRAPS TOGETHER'
+          const sub = still ? (window.GameGrip.game === 'demos' ? strapWords('STRAP DOWN', 'BOTH STRAPS DOWN') : '')
+            : window.GameGrip.game === 'demos' ? strapWords('ONE BIG SWING', 'BOTH STRAPS TOGETHER')
             : window.GameGrip.game === 'minecraft' ? 'TURN ONCE, THEN HOLD' : '';
           shout(still ? 'HOLD IT...' : (window.GameGrip.game === 'demos' ? 'SWING!' : STEP_UI[step].go), { sub, hold: 1.0, size: 1.1, tilt: -9 });
           if (still) {
@@ -1575,7 +1580,7 @@ async function run(game) {
     await guard(connected);
     setStep(0, 'active');
     const calibrating = calibrateFromPython();
-    shout('HOLD STILL!', { sub: game === 'demos' ? 'BOTH STRAPS DOWN' : 'FREEZE THAT TOY', burst: true, hold: 0.9, size: 0.8 });
+    shout('HOLD STILL!', { sub: game === 'demos' ? strapWords('STRAP DOWN', 'BOTH STRAPS DOWN') : 'FREEZE THAT TOY', burst: true, hold: 0.9, size: 0.8 });
     bridge.ready();
     await guard(calibrating);
     await guard(floorRun());

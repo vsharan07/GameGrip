@@ -50,6 +50,8 @@ DEVICE_ID = "esp1"
 # How long to wait for the first data line. If the board does reset on connect,
 # imuNumbers.ino spends ~5 s trying WiFi before it streams, so leave headroom.
 PROBE_SECONDS = 8.0
+# --one-strap: never open a second board. The other player uses the keyboard.
+ONE_STRAP = False
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -268,13 +270,17 @@ class Session:
       print("\n=== MPU6050 Swing Calibrator & Detector ===", flush=True)
       print(f"Game: {self.game}. Waiting for the website to start calibration...",
             flush=True)
+      # Demos: find the straps first, so the page knows "the strap" vs "both straps"
+      # before its first HOLD STILL shout.
+      if self.game != "minecraft":
+        self._open_players()
       self.send({"type": "connected", "port": dtw.PORT})
       self.ready.wait()
       if self.stopped:
         return
       if self.game == "minecraft":
         self._minecraft()
-      elif self._open_players() and self._calibrate_demos():
+      elif self._calibrate_demos():
         self._watch_demos()
     except (RuntimeError, LookCalibrationError) as e:
       if not self.stopped:
@@ -305,13 +311,16 @@ class Session:
     import demo_motion
 
     ports = [self.ser]
-    for path in demo_motion.extra_usb_ports(self.ser.port)[:1]:
+    # Use the first other port that opens, so one stale port can't hide the second strap.
+    extra_paths = [] if ONE_STRAP else demo_motion.extra_usb_ports(self.ser.port)
+    for path in extra_paths:
       other = self._open_extra(path)
       if other is None:
         continue
       other.timeout = 0.05
       self.extra_sers.append(other)
       ports.append(other)
+      break
     mapping = demo_motion.players_by_side([ser.port for ser in ports])
     self.roles = demo_motion.BoardRoles()
     for ser in ports:
@@ -321,7 +330,42 @@ class Session:
     if "esp2" in by_device:
       print(f"Right player (blue / pitcher): {by_device['esp2']}", flush=True)
     self.devices = ["esp1"] + (["esp2"] if "esp2" in by_device else [])
+    if len(ports) == 1:
+      # One strap is always the left player; the right player uses the keyboard.
+      self.roles.assign(self.ser.port, "esp1")
+      print("One strap: the other player uses the keyboard.", flush=True)
+    self.send({"type": "straps", "count": len(ports)})
     return True
+
+  def _drop_strap(self, serials, port, why):
+    """A second board failed mid-calibration: carry on with the main strap alone."""
+    print(f"Second strap on {port} {why}. Carrying on with one strap; "
+          "the other player uses the keyboard.", flush=True)
+    for ser in [ser for ser in serials if ser.port == port]:
+      serials.remove(ser)
+      try:
+        ser.close()
+      except Exception:
+        pass
+    self.extra_sers = [ser for ser in self.extra_sers if ser.port != port]
+    self.devices = ["esp1"]
+    if hasattr(self, "roles"):
+      self.roles.assign(self.ser.port, "esp1")
+    self.send({"type": "straps", "count": len(serials)})
+
+  def _straps_phrase(self, serials):
+    return "both straps" if len(serials) > 1 else "the strap"
+
+  def _record(self, serials, seconds):
+    """Record every board. A second board that errors is dropped, not fatal."""
+    import demo_motion
+    lost = set()
+    spare = [ser.port for ser in serials if ser is not self.ser]
+    _mags, gyros = demo_motion.record_windows(serials, seconds, spare=spare, lost=lost)
+    for port in lost:
+      self._drop_strap(serials, port, "stopped responding")
+      gyros.pop(port, None)
+    return gyros
 
   def _calibrate_demos(self):
     """One countdown. Both boards are recorded in every window."""
@@ -344,11 +388,15 @@ class Session:
       if self.stopped:
         return False
       print(">>> Hold still... <<<", flush=True)
-      _mags, gyros = demo_motion.record_windows(serials, dtw.REST_SECONDS)
+      gyros = self._record(serials, dtw.REST_SECONDS)
       rest = gyros
       noises = []
-      for port, samples in gyros.items():
+      for port, samples in list(gyros.items()):
         noise = demo_motion.still_spread(samples)
+        if noise is None and port != self.ser.port:
+          self._drop_strap(serials, port, "sent too few samples")
+          del gyros[port]
+          continue
         if noise is None:
           raise RuntimeError(
               f"{port} sent too few samples. Close the Serial Monitor and check that sketch is streaming.")
@@ -360,7 +408,7 @@ class Session:
       print("Sensor moved during the still step (jitter should be under "
             f"{demo_motion.DEMO_STILL_DPS:g}).", flush=True)
       if attempt < dtw.REST_ATTEMPTS - 1:
-        print("Let's try that again - set both straps down this time.", flush=True)
+        print(f"Let's try that again - set {self._straps_phrase(serials)} down this time.", flush=True)
       else:
         print("Continuing anyway; detection may be less reliable.", flush=True)
     bias = {port: demo_motion.mean_gyro(samples) for port, samples in rest.items()}
@@ -368,12 +416,12 @@ class Session:
     for i in range(1, 4):
       for attempt in range(2):
         print(f"\n--- Step 2: Calibration swing #{i} of 3 ---", flush=True)
-        print("Move both straps together.", flush=True)
+        print("Move both straps together." if len(serials) > 1 else "Move the strap.", flush=True)
         dtw.countdown()
         if self.stopped:
           return False
         print(f">>> SWING #{i} NOW! <<<", flush=True)
-        _mags, gyros = demo_motion.record_windows(serials, dtw.SWING_WINDOW_SECONDS)
+        gyros = self._record(serials, dtw.SWING_WINDOW_SECONDS)
         peaks = {port: demo_motion.peak_above(samples, bias.get(port))
                  for port, samples in gyros.items()}
         both_moved = all(peak >= demo_motion.CAL_SWING_DPS for peak in peaks.values())
@@ -387,7 +435,10 @@ class Session:
         print("One strap stayed still. Swing both together.", flush=True)
       if i < 3:
         time.sleep(1.0)
-    hz = demo_motion.sample_rate(rest, dtw.REST_SECONDS)
+    # Only boards still connected; a dropped second strap must not skew the rate.
+    live_ports = {ser.port for ser in serials}
+    hz = demo_motion.sample_rate({port: v for port, v in rest.items() if port in live_ports},
+                                 dtw.REST_SECONDS)
     self.swingers = {}
     self.biases = {}
     for ser in serials:
@@ -684,7 +735,11 @@ def main():
   parser = argparse.ArgumentParser(description="Run the GameGrip calibration site and sports demos.")
   parser.add_argument("--port", default=dtw.PORT, help="ESP32 serial port, e.g. COM3.")
   parser.add_argument("--no-browser", action="store_true", help="Do not open a browser automatically.")
+  parser.add_argument("--one-strap", action="store_true",
+                      help="Sports demos: use only the --port strap; the other player uses the keyboard.")
   args = parser.parse_args()
+  global ONE_STRAP
+  ONE_STRAP = args.one_strap
   import demo_motion
   dtw.PORT = demo_motion.choose_port(args.port)
   if dtw.PORT != args.port:
